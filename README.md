@@ -18,6 +18,12 @@ Customizable 3D conversational AI character
 - Function Calling
 - Audio Recording
 
+### Custom Agent
+
+- Local AI via custom endpoints
+- Wyoming protocol for STT (faster-whisper) and TTS (piper)
+- Custom OpenAI-compatible endpoint for LLM
+
 ### Character - [three-vrm](https://github.com/pixiv/three-vrm)
 
 - Custom 3D model ([vrm](https://hub.vroid.com/en))
