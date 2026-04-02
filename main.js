@@ -212,7 +212,7 @@ async function loadGearsIfEnabled() {
 
         if (intersects.length > 0) {
           // Open URL in a small popup window
-          window.open('http://localhost:3000/settings', 'popupWindow', 'width=950,height=908,scrollbars=yes,resizable=yes'); // Adjust width and height as needed
+          window.open('/settings', 'popupWindow', 'width=950,height=908,scrollbars=yes,resizable=yes'); // Adjust width and height as needed
         }
       });
     }, undefined, (error) => {
