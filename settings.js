@@ -167,6 +167,17 @@ async function loadSettings() {
 
 // Function to save settings
 async function saveSettings(key, value) {
+    // rebind vapi keys for backwards compatibilty
+    switch(key) {
+        case "privateKey":
+            key = "vapiPrivateKey";
+            break;
+        case "publicKey":
+            key = "vapiPublicKey";
+            break;
+        default:
+            break;
+    }
     await fetch('/api/settings', {
         method: 'POST',
         headers: {
