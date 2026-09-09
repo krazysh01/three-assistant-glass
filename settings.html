@@ -200,7 +200,8 @@
                     <div class="input-container">
                         <label for="customLLMModel" style="font-size: 1.2em;">Model</label>
                         <div class="input-wrapper">
-                            <input type="text" id="customLLMModel" placeholder="llama3" class="rounded-input">
+                            <input type="text" id="customLLMModel" placeholder="llama3" class="rounded-input" list="customLLMModelList">
+                            <datalist id="customLLMModelList"></datalist>
                         </div>
                         <button class="save-button" data-save="customLLMModel">Save</button>
                     </div>
@@ -279,7 +280,8 @@
         <div class="input-container">
             <label for="sttModel" style="font-size: 1.2em;">STT Model</label>
             <div class="input-wrapper">
-                <input type="text" id="sttModel" placeholder="Systran/faster-whisper-small" class="rounded-input">
+                <input type="text" id="sttModel" placeholder="Systran/faster-whisper-small" class="rounded-input" list="sttModelList">
+                <datalist id="sttModelList"></datalist>
             </div>
             <button class="save-button" data-save="sttModel">Save</button>
         </div>
@@ -307,7 +309,8 @@
         <div class="input-container">
             <label for="ttsModel" style="font-size: 1.2em;">TTS Model</label>
             <div class="input-wrapper">
-                <input type="text" id="ttsModel" placeholder="speaches-ai/Kokoro-82M-v1.0-ONNX" class="rounded-input">
+                <input type="text" id="ttsModel" placeholder="speaches-ai/Kokoro-82M-v1.0-ONNX" class="rounded-input" list="ttsModelList">
+                <datalist id="ttsModelList"></datalist>
             </div>
             <button class="save-button" data-save="ttsModel">Save</button>
         </div>
@@ -315,7 +318,8 @@
         <div class="input-container">
             <label for="ttsVoice" style="font-size: 1.2em;">TTS Voice</label>
             <div class="input-wrapper">
-                <input type="text" id="ttsVoice" placeholder="af_heart" class="rounded-input">
+                <input type="text" id="ttsVoice" placeholder="af_heart" class="rounded-input" list="ttsVoiceList">
+                <datalist id="ttsVoiceList"></datalist>
             </div>
             <button class="save-button" data-save="ttsVoice">Save</button>
         </div>

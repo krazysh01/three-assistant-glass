@@ -47,6 +47,15 @@ browser are the same device. Enable it by setting `"hostClipboardBroadcast": tru
 in `settings.json`. It is off by default, and when off nothing polls the clipboard
 at all.
 
+The settings page suggests models and voices from each endpoint's `/v1/models`.
+How much it can offer depends on the server: `task` and `voices` are extensions
+that [Speaches](https://speaches.ai) provides and the OpenAI API does not, so
+against Speaches you get filtered model lists and every voice a model supports,
+against OpenAI you get the model list plus the documented voices for known TTS
+models, and against anything else the fields stay plain text. Suggestions are
+never a constraint — any value can still be typed, since a bundled list goes
+stale as soon as a provider adds a voice.
+
 The browser calls the LLM, STT and TTS endpoints directly, so each service must
 allow the app's origin via CORS. On [Speaches](https://speaches.ai) that is the
 `ALLOW_ORIGINS` variable, which takes a JSON array — `["http://localhost:3000"]`,

@@ -1,5 +1,7 @@
 import { loadSettings, saveSetting, clearAllOverrides, getDefaults, getSettings }
   from './settings-store.mjs';
+import { fetchModels, sttModels, ttsModels, voicesFor, describeVoice, describeLanguages, fillDatalist }
+  from './model-catalog.mjs';
 
 document.querySelectorAll('.settings-tab-button').forEach(button => {
     button.addEventListener('click', () => {
@@ -154,6 +156,10 @@ async function saveSettings(key, value) {
     }
     await saveSetting(key, value);
     refreshOverrideSummary();
+
+    // A changed endpoint or key means a different catalogue
+    if (['sttBaseUrl', 'sttApiKey', 'ttsBaseUrl', 'ttsApiKey'].includes(key)) refreshSpeechSuggestions();
+    if (['customLLMBaseUrl', 'customLLMApiKey'].includes(key)) refreshLlmSuggestions();
 }
 
 // Function to load assistants from Vapi
@@ -237,6 +243,66 @@ async function initializePage() {
     await loadAssistants();
 }
 
+// ─── Model and voice suggestions ─────────────────────────────────────────────
+// Populated from each configured endpoint's /v1/models. Everything here is
+// best-effort: if a server offers nothing, the datalist stays empty and the
+// field behaves exactly as it did before, a plain text input.
+
+let ttsCatalog = [];
+
+function noteSuggestions(id, count, what) {
+    const input = document.getElementById(id);
+    if (!input) return;
+    const noun = count === 1 ? what.replace(/s$/, '') : what;
+    input.title = count
+        ? `${count} ${noun} suggested by the server - you can still type any value`
+        : `No ${what} advertised by this endpoint - type the value manually`;
+}
+
+async function refreshSpeechSuggestions() {
+    const s = await loadSettings();
+
+    const stt = await fetchModels(s.sttBaseUrl, s.sttApiKey);
+    noteSuggestions('sttModel', fillDatalist(
+        document.getElementById('sttModelList'),
+        sttModels(stt).map(m => ({ value: m.id, label: describeLanguages(m.language) })),
+    ), 'models');
+
+    ttsCatalog = s.ttsBaseUrl === s.sttBaseUrl ? stt : await fetchModels(s.ttsBaseUrl, s.ttsApiKey);
+    noteSuggestions('ttsModel', fillDatalist(
+        document.getElementById('ttsModelList'),
+        ttsModels(ttsCatalog).map(m => ({ value: m.id, label: m.sample_rate ? `${m.sample_rate} Hz` : '' })),
+    ), 'models');
+
+    refreshVoiceSuggestions();
+}
+
+// Voices depend on the selected TTS model: Kokoro carries dozens, each Piper
+// model exactly one, so this reruns whenever the model field changes.
+function refreshVoiceSuggestions() {
+    const modelId = document.getElementById('ttsModel')?.value;
+    const voices = voicesFor(ttsCatalog, modelId);
+    noteSuggestions('ttsVoice', fillDatalist(
+        document.getElementById('ttsVoiceList'),
+        voices.map(v => ({ value: v.name, label: describeVoice(v) })),
+    ), 'voices');
+}
+
+async function refreshLlmSuggestions() {
+    const s = await loadSettings();
+    const models = await fetchModels(s.customLLMBaseUrl, s.customLLMApiKey);
+    noteSuggestions('customLLMModel', fillDatalist(
+        document.getElementById('customLLMModelList'),
+        models.map(m => ({ value: m.id, label: m.owned_by || '' })),
+    ), 'models');
+}
+
+async function refreshAllSuggestions() {
+    await Promise.all([refreshSpeechSuggestions(), refreshLlmSuggestions()]);
+}
+
+document.getElementById('ttsModel')?.addEventListener('change', refreshVoiceSuggestions);
+
 // Show how many settings this browser has overridden, and offer a way back to
 // the deployment's defaults.
 function refreshOverrideSummary() {
@@ -258,7 +324,7 @@ document.getElementById('resetOverrides')?.addEventListener('click', async () =>
 });
 
 // Call initializePage when the page loads
-initializePage().then(refreshOverrideSummary);
+initializePage().then(refreshOverrideSummary).then(refreshAllSuggestions);
 
 
 document.querySelectorAll('.save-button').forEach(button => {
