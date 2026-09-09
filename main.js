@@ -896,14 +896,15 @@ window.addEventListener('load', async () => {
   socket.onmessage = function(event) {
     const data = JSON.parse(event.data);
     if (data.type === 'clipboard') {
-      clipboardAlert.textContent = '📋 Clipboard Updated: ';
+      clipboardAlert.textContent = '📋 Host clipboard updated';
       clipboardAlert.style.display = 'block';
       setTimeout(() => {
         clipboardAlert.style.display = 'none';
       }, 5000);
 
-      // Send clipboard content to Vapi as a system message
-      const systemMessage = `User's clipboard updated: ${data.content}`;
+      // This is the clipboard of the machine running the server, which is only
+      // the user's own when the app is being used on that same machine.
+      const systemMessage = `Host machine clipboard updated: ${data.content}`;
       sendSystemMessageToVapi(systemMessage);
     }
   };

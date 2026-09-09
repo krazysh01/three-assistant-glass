@@ -30,9 +30,12 @@ once from the server's `settings.json`; after that the server holds no per-user
 state. If you host this for more than one person, leave the credential fields in
 `settings.json` empty — it seeds every new browser.
 
-`clipboardAccess` is the exception. It lets the server read the *host machine's*
-clipboard and broadcast it to every connected client, so it stays server-side and
-is off by default.
+`hostClipboardBroadcast` is the exception, and is not in the settings UI. It makes
+the server read the clipboard of **the machine it runs on** and send it to every
+connected browser once a second — so it only makes sense when the server and the
+browser are the same device. Enable it by setting `"hostClipboardBroadcast": true`
+in `settings.json`. It is off by default, and when off nothing polls the clipboard
+at all.
 
 The browser calls the LLM, STT and TTS endpoints directly, so each service must
 allow the app's origin via CORS. On [Speaches](https://speaches.ai) that is the

@@ -4,8 +4,8 @@
 // its own credentials. The server is used only to seed a browser that has none
 // yet, which keeps existing single-user installs working unchanged.
 //
-// clipboardAccess is the exception: it gates the server reading the host
-// machine's clipboard, so it stays server-side and is not kept here.
+// hostClipboardBroadcast is deliberately absent: it is a server-side option
+// about the host machine, not a per-browser preference. See server.mjs.
 
 const STORAGE_KEY = 'three-assistant-glass.settings';
 
@@ -56,7 +56,8 @@ export async function loadSettings(refresh = false) {
   }
 
   const seed = await fetchSeed();
-  delete seed.clipboardAccess;   // server-owned, never mirrored locally
+  delete seed.clipboardAccess;          // legacy server-owned key
+  delete seed.hostClipboardBroadcast;   // server-owned, never mirrored locally
   cache = seed;
   writeStore(cache);
   console.log('[settings] seeded this browser from the server');
@@ -77,28 +78,6 @@ export async function saveSettings(patch) {
   cache = settings;
   writeStore(settings);
   return settings;
-}
-
-// ─── Clipboard access (server-side) ──────────────────────────────────────────
-// The server reads the host machine's clipboard, so this one is not a per-browser
-// preference and is stored server-side.
-
-export async function getClipboardAccess() {
-  try {
-    const res = await fetch('/api/settings/clipboard');
-    return (await res.json()).clipboardAccess || false;
-  } catch (e) {
-    console.warn('[settings] could not read clipboard access:', e.message);
-    return false;
-  }
-}
-
-export async function setClipboardAccess(enabled) {
-  await fetch('/api/settings/clipboard', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ clipboardAccess: enabled }),
-  });
 }
 
 // Notify other tabs (the settings page and the main view) that settings changed.

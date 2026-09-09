@@ -1,5 +1,4 @@
-import { loadSettings, saveSetting, getClipboardAccess, setClipboardAccess }
-  from './settings-store.mjs';
+import { loadSettings, saveSetting } from './settings-store.mjs';
 
 document.querySelectorAll('.settings-tab-button').forEach(button => {
     button.addEventListener('click', () => {
@@ -11,14 +10,6 @@ document.querySelectorAll('.settings-tab-button').forEach(button => {
         const tabId = button.getAttribute('data-tab');
         document.getElementById(tabId).classList.add('active');
     });
-});
-
-const clipboardAccessToggle = document.getElementById('clipboardAccessToggle');
-
-getClipboardAccess().then((enabled) => { clipboardAccessToggle.checked = enabled; });
-
-clipboardAccessToggle.addEventListener('change', () => {
-    setClipboardAccess(clipboardAccessToggle.checked);
 });
 
 document.querySelectorAll('.toggle-visibility').forEach(button => {

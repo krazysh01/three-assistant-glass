@@ -53,7 +53,7 @@ app.get('/vapi-web-bundle.min.js', (req, res) => {
 // Load or create settings.json
 const settingsPath = path.join(__dirname, 'settings.json');
 const exampleSettingsPath = path.join(__dirname, 'settings.example.json');
-let settings = { clipboardAccess: false };
+let settings = { hostClipboardBroadcast: false };
 
 async function loadOrCreateSettings() {
   try {
@@ -80,22 +80,6 @@ await loadOrCreateSettings();
 // Modify the /settings route
 app.get('/settings', (req, res) => {
   res.sendFile(path.join(__dirname, 'settings.html'));
-});
-
-// Add a new route to get and set the clipboard access setting
-app.get('/api/settings/clipboard', (req, res) => {
-  res.json({ clipboardAccess: settings.clipboardAccess });
-});
-
-app.post('/api/settings/clipboard', express.json(), async (req, res) => {
-  settings.clipboardAccess = req.body.clipboardAccess;
-  try {
-    await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2));
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error writing settings:', error);
-    res.status(500).json({ error: 'Unable to update settings' });
-  }
 });
 
 // Seed values for a browser with no settings of its own. Settings are stored
@@ -175,24 +159,38 @@ wss.on('connection', (ws) => {
 
 let lastClipboardContent = '';
 
-// Modify the clipboard checking interval
+// Broadcast the HOST MACHINE's clipboard to every connected browser.
+//
+// clipboardy reads the clipboard of the machine running this server, and the
+// result goes to all clients, so this is only meaningful when the server and
+// the browser are the same device. It is not a per-user preference and is not
+// exposed in the settings UI: enabling it for a remote client would send them
+// whatever is copied on the host, once a second. Turn it on by setting
+// "hostClipboardBroadcast": true in settings.json.
 const checkClipboard = () => {
-  if (settings.clipboardAccess) {
-    clipboardy.read().then(text => {
-      if (text !== lastClipboardContent) {
-        console.log('Clipboard changed:', text);
-        lastClipboardContent = text;
-        wss.clients.forEach((client) => {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({ type: 'clipboard', content: text }));
-          }
-        });
-      }
-    }).catch(console.error);
-  }
+  clipboardy.read().then(text => {
+    if (text !== lastClipboardContent) {
+      console.log('[clipboard] host clipboard changed, broadcasting to clients');
+      lastClipboardContent = text;
+      wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({ type: 'clipboard', content: text }));
+        }
+      });
+    }
+  }).catch(console.error);
 };
 
-setInterval(checkClipboard, 1000);
+// Resolved once at startup - there is no way to change it at runtime, so when
+// it is off nothing polls the clipboard at all.
+// clipboardAccess is the pre-rename key, still honoured.
+if (settings.hostClipboardBroadcast ?? settings.clipboardAccess) {
+  console.warn(
+    `[clipboard] hostClipboardBroadcast is ON: the clipboard of THIS machine will be `
+    + `sent to every browser connected to this server, once a second.`
+  );
+  setInterval(checkClipboard, 1000);
+}
 
 server.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
