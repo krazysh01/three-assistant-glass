@@ -1,4 +1,5 @@
-import { loadSettings, saveSetting } from './settings-store.mjs';
+import { loadSettings, saveSetting, clearAllOverrides, getDefaults, getSettings }
+  from './settings-store.mjs';
 
 document.querySelectorAll('.settings-tab-button').forEach(button => {
     button.addEventListener('click', () => {
@@ -152,6 +153,7 @@ async function saveSettings(key, value) {
             break;
     }
     await saveSetting(key, value);
+    refreshOverrideSummary();
 }
 
 // Function to load assistants from Vapi
@@ -235,8 +237,28 @@ async function initializePage() {
     await loadAssistants();
 }
 
+// Show how many settings this browser has overridden, and offer a way back to
+// the deployment's defaults.
+function refreshOverrideSummary() {
+    const label = document.getElementById('overrideCount');
+    if (!label) return;
+    const defaults = getDefaults();
+    const effective = getSettings();
+    const count = Object.keys(effective)
+        .filter(k => JSON.stringify(defaults[k]) !== JSON.stringify(effective[k])).length;
+    label.textContent = count === 0
+        ? 'Nothing is overridden here - this browser follows the deployment defaults.'
+        : `${count} setting${count === 1 ? '' : 's'} overridden in this browser.`;
+}
+
+document.getElementById('resetOverrides')?.addEventListener('click', async () => {
+    await clearAllOverrides();
+    await populateSettingsForm();
+    refreshOverrideSummary();
+});
+
 // Call initializePage when the page loads
-initializePage();
+initializePage().then(refreshOverrideSummary);
 
 
 document.querySelectorAll('.save-button').forEach(button => {

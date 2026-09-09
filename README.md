@@ -24,11 +24,21 @@ Customizable 3D conversational AI character
 - OpenAI-compatible speech endpoints for STT (`/v1/audio/transcriptions`) and TTS (`/v1/audio/speech`) — works with [Speaches](https://speaches.ai), Kokoro-FastAPI, LocalAI, or OpenAI itself
 - Custom OpenAI-compatible endpoint for LLM
 
-Settings are stored per-browser in `localStorage`, so each user keeps their own
-configuration and their own credentials. A browser with no settings yet is seeded
-once from the server's `settings.json`; after that the server holds no per-user
-state. If you host this for more than one person, leave the credential fields in
-`settings.json` empty — it seeds every new browser.
+Settings are layered. `settings.json` on the server holds the deployment's
+defaults, shared by every client; anything a user changes is saved in their own
+browser as an override, and effective settings are the defaults with those
+overrides on top.
+
+So a shared private deployment can be configured centrally once and every browser
+picks it up with no setup, while any user can still change values for themselves.
+A deployment with nothing pre-configured works too — the client supplies
+everything. Changing a default on the server reaches every client that hasn't
+overridden that particular key, and the settings page has a reset that drops a
+browser's overrides so it follows the defaults again.
+
+Because `settings.json` is served to every client as the defaults, only put
+credentials there that you're happy for all of them to use; otherwise leave those
+fields empty and let each user enter their own.
 
 `hostClipboardBroadcast` is the exception, and is not in the settings UI. It makes
 the server read the clipboard of **the machine it runs on** and send it to every
