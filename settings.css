@@ -287,3 +287,55 @@ h1 {
     background-color: #fbfbf7;
     color: #1d3c34;
 }
+/* ─── Single save bar ─────────────────────────────────────────────────────── */
+
+.settings-save-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 15px;
+    padding: 12px 20px;
+    background-color: #fbfbf7;
+    border-top: 1px solid rgba(0, 0, 0, 0.12);
+    box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.06);
+    z-index: 100;
+}
+
+/* Keep the last settings row clear of the fixed bar */
+body {
+    padding-bottom: 80px;
+}
+
+.settings-save-bar .save-button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.save-status {
+    font-size: 0.95em;
+    opacity: 0.75;
+}
+
+.save-status.error {
+    color: #b00020;
+    opacity: 1;
+}
+
+/* ─── Invalid fields ──────────────────────────────────────────────────────── */
+
+.rounded-input.invalid,
+input.invalid {
+    border: 2px solid #b00020;
+    background-color: rgba(176, 0, 32, 0.04);
+}
+
+.field-error {
+    display: block;
+    color: #b00020;
+    font-size: 0.85em;
+    margin-top: 4px;
+}
