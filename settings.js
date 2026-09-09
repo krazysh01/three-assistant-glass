@@ -1,4 +1,4 @@
-import { loadSettings, saveSetting, clearAllOverrides, getDefaults, getSettings }
+import { loadSettings, saveSetting, saveSettings, clearAllOverrides, getDefaults, getSettings }
   from './settings-store.mjs';
 import { fetchModels, sttModels, ttsModels, voicesFor, describeVoice, describeLanguages, fillDatalist }
   from './model-catalog.mjs';
@@ -141,26 +141,6 @@ async function populateSettingsForm() {
     document.getElementById('ttsApiKey').value = settings.ttsApiKey || '';
 }
 
-// Function to save settings
-async function saveSettings(key, value) {
-    // rebind vapi keys for backwards compatibilty
-    switch(key) {
-        case "privateKey":
-            key = "vapiPrivateKey";
-            break;
-        case "publicKey":
-            key = "vapiPublicKey";
-            break;
-        default:
-            break;
-    }
-    await saveSetting(key, value);
-    refreshOverrideSummary();
-
-    // A changed endpoint or key means a different catalogue
-    if (['sttBaseUrl', 'sttApiKey', 'ttsBaseUrl', 'ttsApiKey'].includes(key)) refreshSpeechSuggestions();
-    if (['customLLMBaseUrl', 'customLLMApiKey'].includes(key)) refreshLlmSuggestions();
-}
 
 // Function to load assistants from Vapi
 async function loadAssistants() {
@@ -229,9 +209,7 @@ async function updateAssistantInfo(assistantID, vapiPrivateKey) {
 // Event listener for assistant selection
 document.getElementById('assistantIDSelect').addEventListener('change', async (e) => {
     const assistantID = e.target.value;
-    await saveSettings('assistantID', assistantID);
-
-    const settings = await loadSettings(true);
+    const settings = await loadSettings();
     await updateAssistantInfo(assistantID, settings.vapiPrivateKey);
 });
 
@@ -242,6 +220,65 @@ async function initializePage() {
     await loadCharacters();
     await loadAssistants();
 }
+
+// ─── Form fields ─────────────────────────────────────────────────────────────
+// Every setting the page edits, in one place. Changing an endpoint usually means
+// changing its model and voice too, so the page collects edits and commits them
+// with a single save rather than a button per field.
+
+const FIELDS = [
+    { key: 'settingsIconToggle', id: 'settingsIconToggle',   type: 'checkbox' },
+    { key: 'showTime',           id: 'showTimeToggle',       type: 'checkbox' },
+    { key: 'timeFormat',         id: 'timeFormatSelect',     type: 'value' },
+    { key: 'freeCamera',         id: 'freeCameraToggle',     type: 'checkbox' },
+    { key: 'sceneDebug',         id: 'sceneDebugToggle',     type: 'checkbox' },
+    { key: 'dragDropSupport',    id: 'dragDropToggle',       type: 'checkbox' },
+    { key: 'vrmDebug',           id: 'vrmDebugToggle',       type: 'checkbox' },
+    { key: 'animationPicker',    id: 'animationPickerToggle', type: 'checkbox' },
+    { key: 'idleAnimation',      id: 'idleAnimationSelect',  type: 'value' },
+    { key: 'assistantShortcut',  id: 'assistantShortcut',    type: 'value' },
+    { key: 'assistantProvider',  id: 'assistantProviderSelect', type: 'value' },
+    { key: 'assistantID',        id: 'assistantIDSelect',    type: 'value' },
+    { key: 'vapiPublicKey',      id: 'publicKey',            type: 'value' },
+    { key: 'vapiPrivateKey',     id: 'privateKey',           type: 'value' },
+    { key: 'customLLMBaseUrl',   id: 'customLLMBaseUrl',     type: 'value', validate: validateBaseUrl },
+    { key: 'customLLMApiKey',    id: 'customLLMApiKey',      type: 'value' },
+    { key: 'customLLMModel',     id: 'customLLMModel',       type: 'value' },
+    { key: 'customSystemPrompt', id: 'customSystemPrompt',   type: 'value' },
+    { key: 'customFirstMessage', id: 'customFirstMessage',   type: 'value' },
+    { key: 'sttBaseUrl',         id: 'sttBaseUrl',           type: 'value', validate: validateBaseUrl },
+    { key: 'sttModel',           id: 'sttModel',             type: 'value' },
+    { key: 'sttApiKey',          id: 'sttApiKey',            type: 'value' },
+    { key: 'ttsBaseUrl',         id: 'ttsBaseUrl',           type: 'value', validate: validateBaseUrl },
+    { key: 'ttsModel',           id: 'ttsModel',             type: 'value' },
+    { key: 'ttsVoice',           id: 'ttsVoice',             type: 'value' },
+    { key: 'ttsApiKey',          id: 'ttsApiKey',            type: 'value' },
+];
+
+// Empty is allowed everywhere - the client falls back to a default endpoint -
+// but a non-empty base URL that cannot be parsed would fail silently at request
+// time, so it is worth catching here.
+function validateBaseUrl(value) {
+    if (!value.trim()) return null;
+    let url;
+    try {
+        url = new URL(value);
+    } catch (e) {
+        return 'Not a valid URL - include the scheme, e.g. http://localhost:8000/v1';
+    }
+    if (!/^https?:$/.test(url.protocol)) return 'Must be an http:// or https:// URL';
+    if (location.protocol === 'https:' && url.protocol === 'http:') {
+        return 'The page is served over HTTPS, so the browser will block this http:// endpoint';
+    }
+    return null;
+}
+
+const fieldEl = (f) => document.getElementById(f.id);
+const readField = (f) => {
+    const el = fieldEl(f);
+    if (!el) return undefined;
+    return f.type === 'checkbox' ? el.checked : el.value;
+};
 
 // ─── Model and voice suggestions ─────────────────────────────────────────────
 // Populated from each configured endpoint's /v1/models. Everything here is
@@ -310,6 +347,112 @@ document.getElementById('ttsModel')?.addEventListener('change', () => {
     refreshVoiceSuggestions();
 });
 
+// ─── Validation, dirty tracking and saving ───────────────────────────────────
+
+let savedSnapshot = {};   // field values as last loaded or saved
+
+function setFieldError(f, message) {
+    const el = fieldEl(f);
+    if (!el) return;
+    el.classList.toggle('invalid', Boolean(message));
+    el.setAttribute('aria-invalid', message ? 'true' : 'false');
+
+    const errorId = `${f.id}Error`;
+    let note = document.getElementById(errorId);
+    if (!message) {
+        note?.remove();
+        return;
+    }
+    if (!note) {
+        note = document.createElement('span');
+        note.id = errorId;
+        note.className = 'field-error';
+        (el.closest('.input-wrapper') || el).insertAdjacentElement('afterend', note);
+    }
+    note.textContent = message;
+}
+
+// Returns the fields that are currently invalid.
+function validateForm() {
+    const invalid = [];
+    for (const f of FIELDS) {
+        if (!f.validate || !fieldEl(f)) continue;
+        const message = f.validate(String(readField(f) ?? ''));
+        setFieldError(f, message);
+        if (message) invalid.push(f);
+    }
+    return invalid;
+}
+
+function changedKeys() {
+    return FIELDS.filter((f) => fieldEl(f))
+        .filter((f) => JSON.stringify(readField(f)) !== JSON.stringify(savedSnapshot[f.key]))
+        .map((f) => f.key);
+}
+
+// Save is enabled only when there is something to save and nothing is invalid.
+function refreshSaveState() {
+    const button = document.getElementById('saveAll');
+    const status = document.getElementById('saveStatus');
+    if (!button || !status) return;
+
+    const invalid = validateForm();
+    const changed = changedKeys();
+    button.disabled = invalid.length > 0 || changed.length === 0;
+    status.classList.toggle('error', invalid.length > 0);
+
+    if (invalid.length) {
+        status.textContent = `${invalid.length} field${invalid.length === 1 ? '' : 's'} need${invalid.length === 1 ? 's' : ''} fixing`;
+    } else if (changed.length) {
+        status.textContent = `${changed.length} unsaved change${changed.length === 1 ? '' : 's'}`;
+    } else {
+        status.textContent = '';
+    }
+}
+
+function snapshotForm() {
+    savedSnapshot = {};
+    for (const f of FIELDS) {
+        if (fieldEl(f)) savedSnapshot[f.key] = readField(f);
+    }
+}
+
+async function saveAll() {
+    if (validateForm().length) return;
+
+    const patch = {};
+    for (const key of changedKeys()) {
+        const f = FIELDS.find((x) => x.key === key);
+        patch[key] = readField(f);
+    }
+    if (Object.keys(patch).length === 0) return;
+
+    await saveSettings(patch);
+    snapshotForm();
+    refreshSaveState();
+    refreshOverrideSummary();
+
+    const status = document.getElementById('saveStatus');
+    if (status) {
+        status.textContent = 'Saved';
+        setTimeout(() => { if (status.textContent === 'Saved') refreshSaveState(); }, 2000);
+    }
+
+    // A changed endpoint or key means a different catalogue
+    if (['sttBaseUrl', 'sttApiKey', 'ttsBaseUrl', 'ttsApiKey'].some((k) => k in patch)) refreshSpeechSuggestions();
+    if (['customLLMBaseUrl', 'customLLMApiKey'].some((k) => k in patch)) refreshLlmSuggestions();
+}
+
+document.getElementById('saveAll')?.addEventListener('click', saveAll);
+
+// Any edit re-evaluates validity and what is unsaved.
+for (const f of FIELDS) {
+    const el = fieldEl(f);
+    if (!el) continue;
+    el.addEventListener('input', refreshSaveState);
+    el.addEventListener('change', refreshSaveState);
+}
+
 // Show how many settings this browser has overridden, and offer a way back to
 // the deployment's defaults.
 function refreshOverrideSummary() {
@@ -327,67 +470,30 @@ function refreshOverrideSummary() {
 document.getElementById('resetOverrides')?.addEventListener('click', async () => {
     await clearAllOverrides();
     await populateSettingsForm();
+    snapshotForm();
+    refreshSaveState();
     refreshOverrideSummary();
 });
 
 // Call initializePage when the page loads
-initializePage().then(refreshOverrideSummary).then(refreshAllSuggestions);
+// Snapshot after everything has populated - loadAssistants fills a select
+// asynchronously, and taking the baseline earlier would look like a pending edit.
+initializePage()
+    .then(snapshotForm)
+    .then(refreshSaveState)
+    .then(refreshOverrideSummary)
+    .then(refreshAllSuggestions);
 
-
-document.querySelectorAll('.save-button').forEach(button => {
-    button.addEventListener('click', () => {
-        // Added data-save attribute to all save buttons
-        const saveKey = button.getAttribute('data-save');
-        if (saveKey) {
-            const el = document.getElementById(saveKey);
-            saveSettings(saveKey, el.value);
-            return;
-        }
-    });
-});
 
 // Provider selector
 document.getElementById('assistantProviderSelect').addEventListener('change', (e) => {
     const provider = e.target.value;
-    saveSettings('assistantProvider', provider);
     updateProviderUI(provider);
     if (provider === 'vapi') loadAssistants();
 });
 
 // Event listeners for all toggles and selects
-document.getElementById('showTimeToggle').addEventListener('change', (e) => {
-    saveSettings('showTime', e.target.checked);
-});
-
-document.getElementById('timeFormatSelect').addEventListener('change', (e) => {
-    saveSettings('timeFormat', e.target.value);
-});
-
-document.getElementById('freeCameraToggle').addEventListener('change', (e) => {
-    saveSettings('freeCamera', e.target.checked);
-});
-
-document.getElementById('sceneDebugToggle').addEventListener('change', (e) => {
-    saveSettings('sceneDebug', e.target.checked);
-});
-
-document.getElementById('dragDropToggle').addEventListener('change', (e) => {
-    saveSettings('dragDropSupport', e.target.checked);
-});
-
-document.getElementById('vrmDebugToggle').addEventListener('change', (e) => {
-    saveSettings('vrmDebug', e.target.checked);
-});
-
-document.getElementById('animationPickerToggle').addEventListener('change', (e) => {
-    saveSettings('animationPicker', e.target.checked);
-});
-
 // Event listener for idle animation select
-document.getElementById('idleAnimationSelect').addEventListener('change', (e) => {
-    saveSettings('idleAnimation', e.target.value);
-});
-
 // Add this function to handle file uploads
 async function uploadCharacterFiles(files) {
     const formData = new FormData();
@@ -418,10 +524,6 @@ document.getElementById('characterUpload').addEventListener('change', (event) =>
 });
 
 // Add this event listener for settingsIconToggle
-document.getElementById('settingsIconToggle').addEventListener('change', (e) => {
-    saveSettings('settingsIconToggle', e.target.checked);
-});
-
 // Add this new function to handle keyboard shortcut input
 function handleShortcutInput(event) {
     event.preventDefault();
@@ -436,8 +538,7 @@ function handleShortcutInput(event) {
     
     const shortcut = `${ctrl}${alt}${shift}${key}`;
     shortcutInput.value = shortcut;
-    
-    saveSettings('assistantShortcut', shortcut);
+    refreshSaveState();
 }
 
 // Add event listeners after the page loads
