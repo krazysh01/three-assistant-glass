@@ -185,7 +185,6 @@
                         <div class="input-wrapper">
                             <input type="text" id="customLLMBaseUrl" placeholder="http://localhost:11434/v1" class="rounded-input">
                         </div>
-                        <button class="save-button" data-save="customLLMBaseUrl">Save</button>
                     </div>
                     <div class="input-container">
                         <label for="customLLMApiKey" style="font-size: 1.2em;">LLM API Key <span style="font-weight: normal; font-size: 0.85em;">(optional)</span></label>
@@ -195,26 +194,23 @@
                                 <img src="icons/eye-off.svg" alt="Toggle Visibility" class="input-icon" style="vertical-align: middle;">
                             </button>
                         </div>
-                        <button class="save-button" data-save="customLLMApiKey">Save</button>
                     </div>
                     <div class="input-container">
                         <label for="customLLMModel" style="font-size: 1.2em;">Model</label>
                         <div class="input-wrapper">
-                            <input type="text" id="customLLMModel" placeholder="llama3" class="rounded-input">
+                            <input type="text" id="customLLMModel" placeholder="llama3" class="rounded-input" list="customLLMModelList">
+                            <datalist id="customLLMModelList"></datalist>
                         </div>
-                        <button class="save-button" data-save="customLLMModel">Save</button>
                     </div>
                     <div class="input-container">
                         <label for="customSystemPrompt" style="font-size: 1.2em;">System Prompt</label>
                         <textarea id="customSystemPrompt" placeholder="You are a helpful assistant." class="rounded-input" style="width: 100%; min-height: 80px; resize: vertical; font-family: inherit; font-size: 0.95em; padding: 8px; box-sizing: border-box;"></textarea>
-                        <button class="save-button" data-save="customSystemPrompt">Save</button>
                     </div>
                     <div class="input-container">
                         <label for="customFirstMessage" style="font-size: 1.2em;">First Message <span style="font-weight: normal; font-size: 0.85em;">(optional)</span></label>
                         <div class="input-wrapper">
                             <input type="text" id="customFirstMessage" placeholder="Hello! How can I help you?" class="rounded-input">
                         </div>
-                        <button class="save-button" data-save="customFirstMessage">Save</button>
                     </div>
                 </div>
             </div>
@@ -242,7 +238,6 @@
                     <img src="icons/eye-off.svg" alt="Toggle Visibility" class="input-icon" style="vertical-align: middle;">
                 </button>
             </div>
-            <button class="save-button" data-save="publicKey">Save</button>
         </div>
         
         <div class="input-container">
@@ -253,7 +248,6 @@
                     <img src="icons/eye-off.svg" alt="Toggle Visibility" class="input-icon">
                 </button>
             </div>
-            <button class="save-button" data-save="privateKey">Save</button>
         </div>
 
         <h1>
@@ -273,15 +267,14 @@
             <div class="input-wrapper">
                 <input type="text" id="sttBaseUrl" placeholder="http://localhost:8000/v1" class="rounded-input">
             </div>
-            <button class="save-button" data-save="sttBaseUrl">Save</button>
         </div>
 
         <div class="input-container">
             <label for="sttModel" style="font-size: 1.2em;">STT Model</label>
             <div class="input-wrapper">
-                <input type="text" id="sttModel" placeholder="Systran/faster-whisper-small" class="rounded-input">
+                <input type="text" id="sttModel" placeholder="Systran/faster-whisper-small" class="rounded-input" list="sttModelList">
+                <datalist id="sttModelList"></datalist>
             </div>
-            <button class="save-button" data-save="sttModel">Save</button>
         </div>
 
         <div class="input-container">
@@ -292,7 +285,6 @@
                     <img src="icons/eye-off.svg" alt="Toggle Visibility" class="input-icon">
                 </button>
             </div>
-            <button class="save-button" data-save="sttApiKey">Save</button>
         </div>
 
         <p style="font-size: 1.1em; margin-bottom: 0.5em; opacity: 0.8; margin-top: 1em;">Text to Speech (OpenAI-compatible, e.g. Speaches / Kokoro)</p>
@@ -301,23 +293,22 @@
             <div class="input-wrapper">
                 <input type="text" id="ttsBaseUrl" placeholder="http://localhost:8000/v1" class="rounded-input">
             </div>
-            <button class="save-button" data-save="ttsBaseUrl">Save</button>
         </div>
 
         <div class="input-container">
             <label for="ttsModel" style="font-size: 1.2em;">TTS Model</label>
             <div class="input-wrapper">
-                <input type="text" id="ttsModel" placeholder="speaches-ai/Kokoro-82M-v1.0-ONNX" class="rounded-input">
+                <input type="text" id="ttsModel" placeholder="speaches-ai/Kokoro-82M-v1.0-ONNX" class="rounded-input" list="ttsModelList">
+                <datalist id="ttsModelList"></datalist>
             </div>
-            <button class="save-button" data-save="ttsModel">Save</button>
         </div>
 
         <div class="input-container">
             <label for="ttsVoice" style="font-size: 1.2em;">TTS Voice</label>
             <div class="input-wrapper">
-                <input type="text" id="ttsVoice" placeholder="af_heart" class="rounded-input">
+                <input type="text" id="ttsVoice" placeholder="af_heart" class="rounded-input" list="ttsVoiceList">
+                <datalist id="ttsVoiceList"></datalist>
             </div>
-            <button class="save-button" data-save="ttsVoice">Save</button>
         </div>
 
         <div class="input-container">
@@ -328,12 +319,16 @@
                     <img src="icons/eye-off.svg" alt="Toggle Visibility" class="input-icon">
                 </button>
             </div>
-            <button class="save-button" data-save="ttsApiKey">Save</button>
         </div>
     </div>
     
     <!-- Add this hidden file input element just before the closing </body> tag -->
     <input type="file" id="characterUpload" style="display: none;" multiple accept=".png,.vrm,.zip">
+
+    <div id="saveBar" class="settings-save-bar">
+        <span id="saveStatus" class="save-status"></span>
+        <button id="saveAll" class="save-button" disabled>Save changes</button>
+    </div>
 
     <script src="settings.js" type="module"></script>
 </body>
