@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 import { loadMixamoAnimation } from './loadMixamoAnimation.js';
+import { createUtteranceDetector, floatToPcm16, transcribe, synthesize } from './speech.mjs';
 import { SVGLoader } from 'three/addons/loaders/SVGLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { LookingGlassWebXRPolyfill, LookingGlassConfig } from "@lookingglass/webxr"
@@ -72,9 +73,9 @@ let vapi; // Declare vapi at the top level
 
 // Custom provider state
 const customProvider = {
-  sttDataWs: null,
-  sttControlWs: null,
-  ttsWs: null,
+  detector: null,          // VAD state machine, fed from the mic
+  ttsChain: Promise.resolve(),  // serialises synthesis so sentences stay in order
+  session: 0,              // bumped on stop; in-flight results from an old session are discarded
   audioCtx: null,
   micStream: null,
   scriptProcessor: null,
@@ -993,13 +994,9 @@ async function startCustom() {
   const processor = customProvider.audioCtx.createScriptProcessor(4096, 1, 1);
   customProvider.scriptProcessor = processor;
 
-  // Connect STT WebSocket (routes through server.mjs → OpenAI-compatible /audio/transcriptions)
-  const sttDataWs = new WebSocket(wsUrl('/stt'));
-  customProvider.sttDataWs = sttDataWs;
-
-  // Connect TTS WebSocket (routes through server.mjs → OpenAI-compatible /audio/speech)
-  const ttsWs = new WebSocket(wsUrl('/tts'));
-  customProvider.ttsWs = ttsWs;
+  // Speech runs straight from the browser to the STT/TTS services - no server hop.
+  customProvider.detector = createUtteranceDetector();
+  customProvider.ttsChain = Promise.resolve();
   customProvider.ttsAudioQueue = [];
   customProvider.ttsPlaying = false;
 
@@ -1011,83 +1008,50 @@ async function startCustom() {
   customProvider.ttsAudioCtx = ttsAudioCtx;
   customProvider.analyser = analyser;
 
-  // TTS receive handler
-  ttsWs.onmessage = async (event) => {
-    try {
-      const msg = JSON.parse(event.data);
-      if (msg.audioOutput && msg.audioOutput.audio) {
-        const raw = atob(msg.audioOutput.audio);
-        const bytes = new Uint8Array(raw.length);
-        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-        customProvider.ttsAudioQueue.push(bytes.buffer);
-        if (!customProvider.ttsPlaying) playNextTTSChunk();
-      }
-    } catch (e) {
-      console.error('TTS message parse error:', e);
+  // Feed mic frames through the VAD; transcribe each completed utterance.
+  const session = customProvider.session;
+  let frameCount = 0;
+
+  processor.onaudioprocess = (e) => {
+    const detector = customProvider.detector;
+    if (!detector || session !== customProvider.session) return;
+
+    const pcm = floatToPcm16(e.inputBuffer.getChannelData(0));
+    frameCount++;
+    if (frameCount === 1 || frameCount % 50 === 0) {
+      console.log(`[STT] frame #${frameCount} (${pcm.byteLength} PCM bytes)`);
     }
-  };
 
-  ttsWs.onerror = (err) => console.error('TTS WebSocket error:', err);
+    const utterance = detector.push(pcm);
+    if (!utterance) return;
 
-  // STT receive handler
-  sttDataWs.onmessage = (event) => {
-    try {
-      const msg = JSON.parse(event.data);
-      if (msg.type === 'realtime') {
-        updateTextMesh(msg.text);
-        updateVrmNameDisplay('User');
-      } else if (msg.type === 'fullSentence') {
-        customProvider.chatHistory.push({ role: 'user', content: msg.text });
-        updateTextMesh(msg.text);
+    console.log(`[STT] end of utterance, transcribing ${utterance.byteLength} bytes`);
+    detector.setBusy(true);
+    transcribe(utterance, customProvider.settings)
+      .then((text) => {
+        // Ignore anything that lands after the session was stopped
+        if (session !== customProvider.session || !text) return;
+        console.log(`[STT] transcript: "${text}"`);
+        customProvider.chatHistory.push({ role: 'user', content: text });
+        updateTextMesh(text);
         updateVrmNameDisplay('User');
         callLLM();
-      }
-    } catch (e) {
-      console.error('STT message parse error:', e);
-    }
+      })
+      .catch((err) => console.error('[STT] transcription failed:', err.message))
+      .finally(() => detector.setBusy(false));
   };
 
-  sttDataWs.onerror = (err) => console.error('STT WebSocket error:', err);
-
-  // Stream mic audio to STT once connected
-  sttDataWs.onopen = () => {
-    console.log('[STT] WebSocket open, starting audio stream');
-    const metaJson = JSON.stringify({ sampleRate: 16000 });
-    const metaBytes = new TextEncoder().encode(metaJson);
-    let frameCount = 0;
-
-    processor.onaudioprocess = (e) => {
-      if (sttDataWs.readyState !== WebSocket.OPEN) return;
-      const float32 = e.inputBuffer.getChannelData(0);
-      const int16 = new Int16Array(float32.length);
-      for (let i = 0; i < float32.length; i++) {
-        int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32768));
-      }
-      const pcmBytes = new Uint8Array(int16.buffer);
-      const buf = new ArrayBuffer(4 + metaBytes.byteLength + pcmBytes.byteLength);
-      const view = new DataView(buf);
-      view.setUint32(0, metaBytes.byteLength, true); // little-endian length
-      new Uint8Array(buf, 4, metaBytes.byteLength).set(metaBytes);
-      new Uint8Array(buf, 4 + metaBytes.byteLength).set(pcmBytes);
-      sttDataWs.send(buf);
-      frameCount++;
-      if (frameCount === 1 || frameCount % 50 === 0) {
-        console.log(`[STT] sent frame #${frameCount} (${pcmBytes.byteLength} PCM bytes)`);
-      }
-    };
-
-    // Silent gain node connected to destination keeps the audio graph alive
-    // without playing mic audio through speakers
-    const silentGain = customProvider.audioCtx.createGain();
-    silentGain.gain.value = 0;
-    silentGain.connect(customProvider.audioCtx.destination);
-    source.connect(processor);
-    processor.connect(silentGain);
-  };
+  // Silent gain node connected to destination keeps the audio graph alive
+  // without playing mic audio through speakers
+  const silentGain = customProvider.audioCtx.createGain();
+  silentGain.gain.value = 0;
+  silentGain.connect(customProvider.audioCtx.destination);
+  source.connect(processor);
+  processor.connect(silentGain);
 
   // Speak first message if configured
   if (s.customFirstMessage) {
-    ttsWs.onopen = () => speakText(s.customFirstMessage);
+    speakText(s.customFirstMessage);
   }
 
   updateTextMesh('Custom assistant ready. Listening...');
@@ -1095,8 +1059,10 @@ async function startCustom() {
 }
 
 function stopCustom() {
-  if (customProvider.sttDataWs) { customProvider.sttDataWs.close(); customProvider.sttDataWs = null; }
-  if (customProvider.ttsWs) { customProvider.ttsWs.close(); customProvider.ttsWs = null; }
+  // Bump the session so any transcription or synthesis still in flight is discarded
+  customProvider.session++;
+  customProvider.detector = null;
+  customProvider.ttsChain = Promise.resolve();
   if (customProvider.scriptProcessor) { customProvider.scriptProcessor.disconnect(); customProvider.scriptProcessor = null; }
   if (customProvider.micStream) { customProvider.micStream.getTracks().forEach(t => t.stop()); customProvider.micStream = null; }
   if (customProvider.audioCtx) { customProvider.audioCtx.close(); customProvider.audioCtx = null; }
@@ -1180,12 +1146,20 @@ async function callLLM() {
   }
 }
 
+// Synthesis is chained rather than fired in parallel, so a short sentence can't
+// come back before a longer one that preceded it and get spoken out of order.
 function speakText(text) {
-  if (customProvider.ttsWs && customProvider.ttsWs.readyState === WebSocket.OPEN) {
-    customProvider.ttsWs.send(text);
-  } else {
-    console.warn('TTS WebSocket not open');
-  }
+  const session = customProvider.session;
+  customProvider.ttsChain = customProvider.ttsChain
+    .then(async () => {
+      if (session !== customProvider.session) return;
+      const audio = await synthesize(text, customProvider.settings);
+      if (session !== customProvider.session) return;
+      console.log(`[TTS] received ${audio.byteLength} bytes`);
+      customProvider.ttsAudioQueue.push(audio);
+      if (!customProvider.ttsPlaying) playNextTTSChunk();
+    })
+    .catch((err) => console.error('[TTS] synthesis failed:', err.message));
 }
 
 // Stop playback cleanly. Every exit path out of playNextTTSChunk must go through
