@@ -202,6 +202,7 @@ async function populateSettingsForm() {
     document.getElementById('assistantLanguage').value = settings.assistantLanguage || '';
     // Interruption is on unless it was explicitly turned off.
     document.getElementById('bargeIn').checked = settings.bargeIn !== false;
+    document.getElementById('autoExpressions').checked = settings.autoExpressions === true;
     updateSpeechProviderUI();
 }
 
@@ -322,6 +323,7 @@ const FIELDS = [
     { key: 'ttsSpeed',           id: 'ttsSpeed',             type: 'value', validate: validateSpeed },
     { key: 'assistantLanguage',  id: 'assistantLanguage',    type: 'value' },
     { key: 'bargeIn',            id: 'bargeIn',              type: 'checkbox' },
+    { key: 'autoExpressions',    id: 'autoExpressions',      type: 'checkbox' },
 ];
 
 // Blank means "provider default". Anything else has to be a number the

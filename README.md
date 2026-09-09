@@ -51,6 +51,52 @@ The quick-setup buttons fill in a working combination for OpenAI, Ollama, LM
 Studio, Speaches, or fully in-browser speech; every field stays editable
 afterwards.
 
+#### Automatic expressions
+
+Optional, off by default, under **Settings → Assistant → Expressions**. Each
+sentence the character speaks is classified with the
+[GoEmotions](https://huggingface.co/SamLowe/roberta-base-go_emotions-onnx) model
+and blended into the VRM's `happy` / `sad` / `angry` / `relaxed` / `surprised`
+expressions, leaving blinking and mouth movement alone.
+
+Classification runs in the browser through
+[transformers.js](https://github.com/huggingface/transformers.js), on WebGPU
+where the browser has it and WASM otherwise — roughly 350 ms per sentence on
+WebGPU. The first use downloads about 125 MB, which the browser then caches; the
+voice keeps working while it loads, and English replies are all it understands.
+
+Settings are layered. `settings.json` on the server holds the deployment's
+defaults, shared by every client; anything a user changes is saved in their own
+browser as an override, and effective settings are the defaults with those
+overrides on top.
+
+So a shared private deployment can be configured centrally once and every browser
+picks it up with no setup, while any user can still change values for themselves.
+A deployment with nothing pre-configured works too — the client supplies
+everything. Changing a default on the server reaches every client that hasn't
+overridden that particular key, and the settings page has a reset that drops a
+browser's overrides so it follows the defaults again.
+
+Because `settings.json` is served to every client as the defaults, only put
+credentials there that you're happy for all of them to use; otherwise leave those
+fields empty and let each user enter their own.
+
+`hostClipboardBroadcast` is the exception, and is not in the settings UI. It makes
+the server read the clipboard of **the machine it runs on** and send it to every
+connected browser once a second — so it only makes sense when the server and the
+browser are the same device. Enable it by setting `"hostClipboardBroadcast": true`
+in `settings.json`. It is off by default, and when off nothing polls the clipboard
+at all.
+
+The settings page suggests models and voices from each endpoint's `/v1/models`.
+How much it can offer depends on the server: `task` and `voices` are extensions
+that [Speaches](https://speaches.ai) provides and the OpenAI API does not, so
+against Speaches you get filtered model lists and every voice a model supports,
+against OpenAI you get the model list plus the documented voices for known TTS
+models, and against anything else the fields stay plain text. Suggestions are
+never a constraint — any value can still be typed, since a bundled list goes
+stale as soon as a provider adds a voice.
+
 The browser calls the LLM, STT and TTS endpoints directly, so each service must
 allow the app's origin via CORS. (The in-browser speech providers need no
 endpoint, so they need no CORS either.) On [Speaches](https://speaches.ai) that is the
@@ -71,6 +117,7 @@ have its requests blocked by the browser.
 ### Experimental
 
 - Plaintext clipboard access
+- Automatic facial expressions from the character's replies
 
 ### Possible future features
 
@@ -125,8 +172,8 @@ THREE_ASSISTANT_PORT=3010 npm start
 npm test
 ```
 
-Covers the assistant pipeline, the speech queue and the streaming chat parser.
-No network and no dependencies beyond the ones already installed.
+Covers the assistant pipeline, the speech queue, expressions and the settings
+plumbing. No network and no dependencies beyond the ones already installed.
 
 ## View on a Looking Glass Display
 

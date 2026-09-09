@@ -11,6 +11,7 @@ import { streamChat } from './llm.js';
 import { createStt } from './stt.js';
 import { createSpeaker, cleanForSpeech } from './tts.js';
 import { createSentenceSplitter } from './sentences.js';
+import { createAutomaticExpressions } from './automatic-expressions.js';
 
 const DEFAULT_SYSTEM_PROMPT =
   'You are a friendly voice assistant. Reply in short, natural spoken sentences. ' +
@@ -41,6 +42,7 @@ export function isEcho(transcript, recentSpeech) {
 export function createAssistant(settings, ui) {
   const bargeIn = settings.bargeIn !== false;
   const history = [];
+  const expressions = createAutomaticExpressions(ui);
   let stt = null;
   let speaker = null;
   let reply = null;
@@ -161,9 +163,13 @@ export function createAssistant(settings, ui) {
         },
         onSentence: (sentence) => {
           spokenLog.push({ text: sentence, at: Date.now() });
+          const first = spokenText === '';
           spokenText = spokenText ? `${spokenText} ${sentence}` : sentence;
           ui.onSpeaker('Character');
           showText(spokenText);
+          // Expressions follow what has actually been spoken, so the face
+          // matches the audio rather than running ahead of it.
+          expressions.transcript(spokenText, first);
         },
         onEnd: () => {
           if (!bargeIn) stt?.setSuppressed(false);
@@ -198,6 +204,9 @@ export function createAssistant(settings, ui) {
       if (!running || session !== startingSession) return;
       ui.onStatus('Listening…');
 
+      // Downloads a model on first use, so it must not delay the greeting.
+      void expressions.setEnabled(settings.autoExpressions === true);
+
       if (settings.customFirstMessage) {
         history.push({ role: 'assistant', content: settings.customFirstMessage });
         spokenText = '';
@@ -209,6 +218,7 @@ export function createAssistant(settings, ui) {
       running = false;
       session++;
       cancelReply();
+      expressions.stop();
       stt?.stop();
       speaker?.destroy();
       stt = null;
@@ -224,6 +234,9 @@ export function createAssistant(settings, ui) {
       history.push({ role: 'system', content });
       trimHistory();
     },
+
+    setAutomaticExpressions: (value) => expressions.setEnabled(value === true),
+    resetExpressions: () => expressions.reset(),
 
     mouthLevel: () => speaker?.mouthLevel() ?? 0,
   };

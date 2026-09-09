@@ -31,5 +31,6 @@
   "ttsProvider": "openai",
   "ttsSpeed": 1,
   "assistantLanguage": "",
-  "bargeIn": true
+  "bargeIn": true,
+  "autoExpressions": false
 }

@@ -223,6 +223,13 @@ canvas {
   50% { transform: scale(1.35); opacity: 0.55; }
 }
 
+#expressionStatus {
+  padding: 0 12px 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+#expressionStatus:empty { display: none; }
 
 /* The Looking Glass button is created by three.js with inline styles. */
 #dock #VRButton {
@@ -294,6 +301,7 @@ body.xr-presenting #captionCard { display: none; }
 @media (max-width: 640px) {
   #captionCard { bottom: 96px; padding: 20px 18px 16px; }
   #captionText { font-size: 17px; }
+  #expressionStatus { display: none; }
 }
 
 @media (max-height: 700px) {
