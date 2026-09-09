@@ -24,6 +24,12 @@ Customizable 3D conversational AI character
 - OpenAI-compatible speech endpoints for STT (`/v1/audio/transcriptions`) and TTS (`/v1/audio/speech`) — works with [Speaches](https://speaches.ai), Kokoro-FastAPI, LocalAI, or OpenAI itself
 - Custom OpenAI-compatible endpoint for LLM
 
+The browser calls the LLM, STT and TTS endpoints directly, so each service must
+allow the app's origin via CORS. On [Speaches](https://speaches.ai) that is the
+`ALLOW_ORIGINS` variable, which takes a JSON array — `["http://localhost:3000"]`,
+or `["*"]` to allow any origin. A service that isn't configured for CORS will
+have its requests blocked by the browser.
+
 ### Character - [three-vrm](https://github.com/pixiv/three-vrm)
 
 - Custom 3D model ([vrm](https://hub.vroid.com/en))
