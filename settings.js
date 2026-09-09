@@ -1,3 +1,6 @@
+import { loadSettings, saveSetting, clearAllOverrides, getDefaults, getSettings }
+  from './settings-store.mjs';
+
 document.querySelectorAll('.settings-tab-button').forEach(button => {
     button.addEventListener('click', () => {
         document.querySelectorAll('.settings-tab-button, .tab-content, .settings-tab-item').forEach(el => el.classList.remove('active'));
@@ -7,24 +10,6 @@ document.querySelectorAll('.settings-tab-button').forEach(button => {
         
         const tabId = button.getAttribute('data-tab');
         document.getElementById(tabId).classList.add('active');
-    });
-});
-
-const clipboardAccessToggle = document.getElementById('clipboardAccessToggle');
-
-fetch('/api/settings/clipboard')
-    .then(response => response.json())
-    .then(data => {
-        clipboardAccessToggle.checked = data.clipboardAccess;
-    });
-
-clipboardAccessToggle.addEventListener('change', () => {
-    fetch('/api/settings/clipboard', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ clipboardAccess: clipboardAccessToggle.checked }),
     });
 });
 
@@ -80,18 +65,7 @@ async function loadCharacters() {
 // Function to select a character
 async function selectCharacter(name) {
     try {
-        const response = await fetch('/api/settings', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ characterName: name }),
-        });
-        
-        if (!response.ok) {
-            throw new Error('Failed to save character name');
-        }
-        
+        await saveSetting('characterName', name);
         document.getElementById('characterName').textContent = name;
     } catch (error) {
         console.error('Error selecting character:', error);
@@ -99,11 +73,22 @@ async function selectCharacter(name) {
     }
 }
 
-// Function to load settings
-async function loadSettings() {
-    const response = await fetch('/api/settings');
-    const settings = await response.json();
-    clipboardAccessToggle.checked = settings.clipboardAccess;
+// Function to show/hide provider-specific UI sections
+function updateProviderUI(provider) {
+    const vapiSection = document.getElementById('vapiAssistantSection');
+    const customSection = document.getElementById('customAssistantSection');
+    if (provider === 'custom') {
+        vapiSection.style.display = 'none';
+        customSection.style.display = 'block';
+    } else {
+        vapiSection.style.display = 'block';
+        customSection.style.display = 'none';
+    }
+}
+
+// Populate the form fields from the stored settings
+async function populateSettingsForm() {
+    const settings = await loadSettings(true);
     document.getElementById('publicKey').value = settings.vapiPublicKey || '';
     document.getElementById('privateKey').value = settings.vapiPrivateKey || '';
     
@@ -131,25 +116,56 @@ async function loadSettings() {
     // Load the assistant shortcut
     const shortcutInput = document.getElementById('assistantShortcut');
     shortcutInput.value = settings.assistantShortcut || '';
+
+    // Load provider setting
+    const provider = settings.assistantProvider || 'vapi';
+    document.getElementById('assistantProviderSelect').value = provider;
+    updateProviderUI(provider);
+
+    // Load custom provider settings
+    document.getElementById('customLLMBaseUrl').value = settings.customLLMBaseUrl || '';
+    document.getElementById('customLLMApiKey').value = settings.customLLMApiKey || '';
+    document.getElementById('customLLMModel').value = settings.customLLMModel || '';
+    document.getElementById('customSystemPrompt').value = settings.customSystemPrompt || '';
+    document.getElementById('customFirstMessage').value = settings.customFirstMessage || '';
+
+    // Load OpenAI-compatible speech endpoint settings
+    document.getElementById('sttBaseUrl').value = settings.sttBaseUrl || '';
+    document.getElementById('sttModel').value = settings.sttModel || '';
+    document.getElementById('sttApiKey').value = settings.sttApiKey || '';
+    document.getElementById('ttsBaseUrl').value = settings.ttsBaseUrl || '';
+    document.getElementById('ttsModel').value = settings.ttsModel || '';
+    document.getElementById('ttsVoice').value = settings.ttsVoice || '';
+    document.getElementById('ttsApiKey').value = settings.ttsApiKey || '';
 }
 
 // Function to save settings
 async function saveSettings(key, value) {
-    await fetch('/api/settings', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ [key]: value }),
-    });
+    // rebind vapi keys for backwards compatibilty
+    switch(key) {
+        case "privateKey":
+            key = "vapiPrivateKey";
+            break;
+        case "publicKey":
+            key = "vapiPublicKey";
+            break;
+        default:
+            break;
+    }
+    await saveSetting(key, value);
+    refreshOverrideSummary();
 }
 
 // Function to load assistants from Vapi
 async function loadAssistants() {
     try {
-        const settings = await fetch('/api/settings').then(res => res.json());
+        const settings = await loadSettings(true);
+
+        // Only load VAPI assistants when using the VAPI provider
+        if ((settings.assistantProvider || 'vapi') !== 'vapi') return;
+
         const vapiPrivateKey = settings.vapiPrivateKey;
-        
+
         if (!vapiPrivateKey) {
             console.error('Vapi private key not found in settings');
             return;
@@ -209,30 +225,60 @@ document.getElementById('assistantIDSelect').addEventListener('change', async (e
     const assistantID = e.target.value;
     await saveSettings('assistantID', assistantID);
 
-    const settings = await fetch('/api/settings').then(res => res.json());
+    const settings = await loadSettings(true);
     await updateAssistantInfo(assistantID, settings.vapiPrivateKey);
 });
 
 // Modify the initializePage function
 async function initializePage() {
     await loadAnimations();
-    await loadSettings();
+    await populateSettingsForm();
     await loadCharacters();
     await loadAssistants();
 }
 
-// Call initializePage when the page loads
-initializePage();
+// Show how many settings this browser has overridden, and offer a way back to
+// the deployment's defaults.
+function refreshOverrideSummary() {
+    const label = document.getElementById('overrideCount');
+    if (!label) return;
+    const defaults = getDefaults();
+    const effective = getSettings();
+    const count = Object.keys(effective)
+        .filter(k => JSON.stringify(defaults[k]) !== JSON.stringify(effective[k])).length;
+    label.textContent = count === 0
+        ? 'Nothing is overridden here - this browser follows the deployment defaults.'
+        : `${count} setting${count === 1 ? '' : 's'} overridden in this browser.`;
+}
 
-clipboardAccessToggle.addEventListener('change', () => {
-    saveSettings('clipboardAccess', clipboardAccessToggle.checked);
+document.getElementById('resetOverrides')?.addEventListener('click', async () => {
+    await clearAllOverrides();
+    await populateSettingsForm();
+    refreshOverrideSummary();
 });
+
+// Call initializePage when the page loads
+initializePage().then(refreshOverrideSummary);
+
 
 document.querySelectorAll('.save-button').forEach(button => {
     button.addEventListener('click', () => {
-        const input = button.previousElementSibling.querySelector('input');
-        saveSettings(input.id === 'publicKey' ? 'vapiPublicKey' : 'vapiPrivateKey', input.value);
+        // Added data-save attribute to all save buttons
+        const saveKey = button.getAttribute('data-save');
+        if (saveKey) {
+            const el = document.getElementById(saveKey);
+            saveSettings(saveKey, el.value);
+            return;
+        }
     });
+});
+
+// Provider selector
+document.getElementById('assistantProviderSelect').addEventListener('change', (e) => {
+    const provider = e.target.value;
+    saveSettings('assistantProvider', provider);
+    updateProviderUI(provider);
+    if (provider === 'vapi') loadAssistants();
 });
 
 // Event listeners for all toggles and selects

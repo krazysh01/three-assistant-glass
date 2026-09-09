@@ -3,10 +3,19 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 import { loadMixamoAnimation } from './loadMixamoAnimation.js';
+import { createUtteranceDetector, floatToPcm16, transcribe, synthesize } from './speech.mjs';
+import { loadSettings, onSettingsChanged } from './settings-store.mjs';
 import { SVGLoader } from 'three/addons/loaders/SVGLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { LookingGlassWebXRPolyfill, LookingGlassConfig } from "@lookingglass/webxr"
 import { VRButton } from "three/addons/webxr/VRButton.js";
+
+// Build a same-origin WebSocket URL, matching the page's scheme so the app
+// keeps working when served over HTTPS.
+function wsUrl(path = '') {
+  const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  return scheme + location.host + path;
+}
 
 // Set up renderer to use full screen
 const renderer = new THREE.WebGLRenderer();
@@ -63,11 +72,25 @@ const blinkDuration = 0.17; // Duration of a blink in seconds
 
 let vapi; // Declare vapi at the top level
 
+// Custom provider state
+const customProvider = {
+  detector: null,          // VAD state machine, fed from the mic
+  ttsChain: Promise.resolve(),  // serialises synthesis so sentences stay in order
+  session: 0,              // bumped on stop; in-flight results from an old session are discarded
+  audioCtx: null,
+  micStream: null,
+  scriptProcessor: null,
+  analyser: null,
+  ttsAudioQueue: [],
+  ttsPlaying: false,
+  chatHistory: [],
+  settings: {}
+};
+
 // Add this function to fetch settings
 async function fetchSettings() {
     try {
-        const response = await fetch('/api/settings');
-        currentSettings = await response.json();
+        currentSettings = await loadSettings(true);
         if (currentSettings.characterName) {
             defaultModelUrl = `characters/${currentSettings.characterName}.vrm`;
         }
@@ -76,24 +99,22 @@ async function fetchSettings() {
     }
 }
 
-// Add this function to check for settings changes
-function checkSettingsChanges() {
-  fetch('/api/settings')
-    .then(response => response.json())
-    .then(newSettings => {
-      if (JSON.stringify(newSettings) !== JSON.stringify(currentSettings)) {
-        console.log('Settings have changed. Reloading page...');
-        location.reload();
-      }
-    })
-    .catch(error => console.error('Error checking settings:', error));
+// Reload when the settings page (another tab) changes settings. localStorage's
+// storage event fires only in other tabs, which is exactly what's wanted here,
+// and replaces what used to be a poll of /api/settings twice a second.
+function watchSettingsChanges() {
+  onSettingsChanged((newSettings) => {
+    if (JSON.stringify(newSettings) !== JSON.stringify(currentSettings)) {
+      console.log('Settings have changed. Reloading page...');
+      location.reload();
+    }
+  });
 }
 
 // Add this function to get the vrmDebug setting
 async function getVrmDebugSetting() {
   try {
-    const response = await fetch('/api/settings');
-    const settings = await response.json();
+    const settings = await loadSettings();
     return settings.vrmDebug || false;
   } catch (error) {
     console.error('Error fetching vrmDebug setting:', error);
@@ -104,8 +125,7 @@ async function getVrmDebugSetting() {
 // Add this function to get the current idle animation from settings
 async function getCurrentIdleAnimation() {
     try {
-        const response = await fetch('/api/settings');
-        const settings = await response.json();
+        const settings = await loadSettings();
         return settings.idleAnimation ? `animations/${settings.idleAnimation}` : 'animations/idleFemale.fbx';
     } catch (error) {
         console.error('Error fetching idle animation from settings:', error);
@@ -116,8 +136,7 @@ async function getCurrentIdleAnimation() {
 // Add this function to get the settingsIconToggle setting
 async function getSettingsIconToggle() {
   try {
-    const response = await fetch('/api/settings');
-    const settings = await response.json();
+    const settings = await loadSettings();
     return settings.settingsIconToggle || false;
   } catch (error) {
     console.error('Error fetching settingsIconToggle setting:', error);
@@ -197,7 +216,7 @@ async function loadGearsIfEnabled() {
 
         if (intersects.length > 0) {
           // Open URL in a small popup window
-          window.open('http://localhost:3000/settings', 'popupWindow', 'width=950,height=908,scrollbars=yes,resizable=yes'); // Adjust width and height as needed
+          window.open('/settings', 'popupWindow', 'width=950,height=908,scrollbars=yes,resizable=yes'); // Adjust width and height as needed
         }
       });
     }, undefined, (error) => {
@@ -276,7 +295,7 @@ async function initializeApp() {
   // ... rest of the initialization code ...
 
   // Set up an interval to check for settings changes
-  setInterval(checkSettingsChanges, 500); // Check every .5 seconds
+  watchSettingsChanges();
 
   // Load gears if enabled
   await loadGearsIfEnabled();
@@ -675,6 +694,16 @@ function animate() {
   if (currentVrm) {
     updateBlink(deltaTime);
     currentVrm.update(deltaTime);
+
+    // Custom provider: drive mouth animation from TTS playback volume
+    if (customProvider.analyser && customProvider.ttsPlaying) {
+      const data = new Uint8Array(customProvider.analyser.frequencyBinCount);
+      customProvider.analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) sum += (data[i] - 128) ** 2;
+      const rms = Math.sqrt(sum / data.length) / 128;
+      currentVrm.expressionManager.setValue('aa', Math.min(rms * 3, 1));
+    }
   }
 
   // Update controls only if freeCamera is enabled
@@ -750,8 +779,7 @@ let assistantId;
 // Add this function to get the assistantID from settings
 async function getAssistantId() {
   try {
-    const response = await fetch('/api/settings');
-    const settings = await response.json();
+    const settings = await loadSettings();
     return settings.assistantID || '';
   } catch (error) {
     console.error('Error fetching assistantID:', error);
@@ -762,8 +790,7 @@ async function getAssistantId() {
 // Add this function to get the Vapi public key from settings
 async function getVapiPublicKey() {
   try {
-    const response = await fetch('/api/settings');
-    const settings = await response.json();
+    const settings = await loadSettings();
     return settings.vapiPublicKey || '';
   } catch (error) {
     console.error('Error fetching Vapi public key:', error);
@@ -832,7 +859,7 @@ async function initializeVapi() {
 
 // Add this function to send system messages to Vapi
 function sendSystemMessageToVapi(content) {
-  if (vapiActive && vapi) {
+  if (assistantActive && vapi) {
     vapi.send({
       type: "add-message",
       message: {
@@ -845,61 +872,75 @@ function sendSystemMessageToVapi(content) {
 
 // Update the socket.onmessage function
 window.addEventListener('load', async () => {
-  initializeVapi();
+  const settings = await loadSettings();
 
-  document.getElementById('toggleVapi').addEventListener('click', toggleVapi);
+  const provider = settings.assistantProvider || 'vapi';
+  if (provider === 'vapi') {
+    initializeVapi();
+  } else {
+    initializeCustomProvider(settings);
+  }
 
-  // Fetch the assistantShortcut from settings
-  const response = await fetch('/api/settings');
-  const settings = await response.json();
+  document.getElementById('toggleVapi').addEventListener('click', toggleAssistant);
+
   const assistantShortcut = settings.assistantShortcut;
-
   document.addEventListener('keydown', (e) => {
     if (e.key === assistantShortcut) {
-      toggleVapi();
+      toggleAssistant();
     }
   });
 
-  const socket = new WebSocket('ws://' + location.host);
+  const socket = new WebSocket(wsUrl());
   const clipboardAlert = document.getElementById('clipboardAlert');
 
   socket.onmessage = function(event) {
     const data = JSON.parse(event.data);
     if (data.type === 'clipboard') {
-      clipboardAlert.textContent = '📋 Clipboard Updated: ';
+      clipboardAlert.textContent = '📋 Host clipboard updated';
       clipboardAlert.style.display = 'block';
       setTimeout(() => {
         clipboardAlert.style.display = 'none';
       }, 5000);
 
-      // Send clipboard content to Vapi as a system message
-      const systemMessage = `User's clipboard updated: ${data.content}`;
+      // This is the clipboard of the machine running the server, which is only
+      // the user's own when the app is being used on that same machine.
+      const systemMessage = `Host machine clipboard updated: ${data.content}`;
       sendSystemMessageToVapi(systemMessage);
     }
   };
 });
 
-let vapiActive = false;
+let assistantActive = false;
 
-function toggleVapi() {
+async function toggleAssistant() {
   const toggleButton = document.getElementById('toggleVapi');
-  
-  if (vapiActive) {
-    stopVapi();
+  const settings = await loadSettings();
+  const provider = settings.assistantProvider || 'vapi';
+
+  if (assistantActive) {
+    if (provider === 'vapi') {
+      stopVapi();
+    } else {
+      stopCustom();
+    }
     toggleButton.textContent = '▶️';
-    vapiActive = false;
+    assistantActive = false;
   } else {
-    startVapi();
+    if (provider === 'vapi') {
+      startVapi();
+    } else {
+      await startCustom();
+    }
     toggleButton.textContent = '🛑';
-    vapiActive = true;
+    assistantActive = true;
   }
 }
 
-// Add these functions to start and stop Vapi
+// Vapi start/stop
 function startVapi() {
   if (vapi && assistantId) {
     vapi.start(assistantId);
-    updateVrmNameDisplay('Character'); // Reset to Character when starting
+    updateVrmNameDisplay('Character');
   } else {
     console.error('Vapi not initialized or assistantID not set');
   }
@@ -911,6 +952,251 @@ function stopVapi() {
   } else {
     console.error('Vapi not initialized');
   }
+}
+
+// ─── Custom provider ──────────────────────────────────────────────────────────
+
+function initializeCustomProvider(settings) {
+  customProvider.settings = settings;
+}
+
+async function startCustom() {
+  const s = customProvider.settings;
+
+  // Initialize chat history with system prompt
+  customProvider.chatHistory = [];
+  if (s.customSystemPrompt) {
+    customProvider.chatHistory.push({ role: 'system', content: s.customSystemPrompt });
+  }
+
+  // Get microphone
+  try {
+    customProvider.micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    console.error('Microphone access denied:', err);
+    updateTextMesh('Microphone access denied.');
+    return;
+  }
+
+  // AudioContext at 16 kHz for STT
+  customProvider.audioCtx = new AudioContext({ sampleRate: 16000 });
+  // Resume explicitly — AudioContext can auto-suspend when created after an await
+  customProvider.audioCtx.resume().then(() =>
+    console.log('[STT] AudioContext state:', customProvider.audioCtx.state)
+  );
+  const source = customProvider.audioCtx.createMediaStreamSource(customProvider.micStream);
+  const processor = customProvider.audioCtx.createScriptProcessor(4096, 1, 1);
+  customProvider.scriptProcessor = processor;
+
+  // Speech runs straight from the browser to the STT/TTS services - no server hop.
+  customProvider.detector = createUtteranceDetector();
+  customProvider.ttsChain = Promise.resolve();
+  customProvider.ttsAudioQueue = [];
+  customProvider.ttsPlaying = false;
+
+  // Set up TTS AudioContext analyser for mouth animation
+  const ttsAudioCtx = new AudioContext();
+  const analyser = ttsAudioCtx.createAnalyser();
+  analyser.fftSize = 256;
+  analyser.connect(ttsAudioCtx.destination);
+  customProvider.ttsAudioCtx = ttsAudioCtx;
+  customProvider.analyser = analyser;
+
+  // Feed mic frames through the VAD; transcribe each completed utterance.
+  const session = customProvider.session;
+  let frameCount = 0;
+
+  processor.onaudioprocess = (e) => {
+    const detector = customProvider.detector;
+    if (!detector || session !== customProvider.session) return;
+
+    const pcm = floatToPcm16(e.inputBuffer.getChannelData(0));
+    frameCount++;
+    if (frameCount === 1 || frameCount % 50 === 0) {
+      console.log(`[STT] frame #${frameCount} (${pcm.byteLength} PCM bytes)`);
+    }
+
+    const utterance = detector.push(pcm);
+    if (!utterance) return;
+
+    console.log(`[STT] end of utterance, transcribing ${utterance.byteLength} bytes`);
+    detector.setBusy(true);
+    transcribe(utterance, customProvider.settings)
+      .then((text) => {
+        // Ignore anything that lands after the session was stopped
+        if (session !== customProvider.session || !text) return;
+        console.log(`[STT] transcript: "${text}"`);
+        customProvider.chatHistory.push({ role: 'user', content: text });
+        updateTextMesh(text);
+        updateVrmNameDisplay('User');
+        callLLM();
+      })
+      .catch((err) => console.error('[STT] transcription failed:', err.message))
+      .finally(() => detector.setBusy(false));
+  };
+
+  // Silent gain node connected to destination keeps the audio graph alive
+  // without playing mic audio through speakers
+  const silentGain = customProvider.audioCtx.createGain();
+  silentGain.gain.value = 0;
+  silentGain.connect(customProvider.audioCtx.destination);
+  source.connect(processor);
+  processor.connect(silentGain);
+
+  // Speak first message if configured
+  if (s.customFirstMessage) {
+    speakText(s.customFirstMessage);
+  }
+
+  updateTextMesh('Custom assistant ready. Listening...');
+  updateVrmNameDisplay('Character');
+}
+
+function stopCustom() {
+  // Bump the session so any transcription or synthesis still in flight is discarded
+  customProvider.session++;
+  customProvider.detector = null;
+  customProvider.ttsChain = Promise.resolve();
+  if (customProvider.scriptProcessor) { customProvider.scriptProcessor.disconnect(); customProvider.scriptProcessor = null; }
+  if (customProvider.micStream) { customProvider.micStream.getTracks().forEach(t => t.stop()); customProvider.micStream = null; }
+  if (customProvider.audioCtx) { customProvider.audioCtx.close(); customProvider.audioCtx = null; }
+  if (customProvider.ttsAudioCtx) { customProvider.ttsAudioCtx.close(); customProvider.ttsAudioCtx = null; customProvider.analyser = null; }
+  customProvider.ttsAudioQueue = [];
+  customProvider.ttsPlaying = false;
+  customProvider.chatHistory = [];
+  updateTextMesh('Session ended.');
+  if (currentVrm) currentVrm.expressionManager.setValue('aa', 0);
+}
+
+async function callLLM() {
+  const s = customProvider.settings;
+  const url = (s.customLLMBaseUrl || 'http://localhost:11434/v1') + '/chat/completions';
+  const headers = { 'Content-Type': 'application/json' };
+  if (s.customLLMApiKey) headers['Authorization'] = 'Bearer ' + s.customLLMApiKey;
+
+  let fullResponse = '';
+  let pendingTTS = '';
+  updateVrmNameDisplay('Character');
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: s.customLLMModel || '',
+        messages: customProvider.chatHistory,
+        stream: true
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      updateTextMesh('LLM error: ' + err);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      for (const line of chunk.split('\n')) {
+        const trimmed = line.replace(/^data: /, '').trim();
+        if (!trimmed || trimmed === '[DONE]') continue;
+        try {
+          const json = JSON.parse(trimmed);
+          const delta = json.choices?.[0]?.delta?.content;
+          if (delta) {
+            fullResponse += delta;
+            pendingTTS += delta;
+            updateTextMesh(fullResponse);
+
+            // Flush complete sentences to TTS without waiting for full response
+            const sentenceRegex = /[^.!?\n]*[.!?\n][)"'\s]*/g;
+            let lastIndex = 0;
+            let match;
+            while ((match = sentenceRegex.exec(pendingTTS)) !== null) {
+              lastIndex = sentenceRegex.lastIndex;
+            }
+            if (lastIndex > 0) {
+              const sentences = pendingTTS.slice(0, lastIndex).trim();
+              pendingTTS = pendingTTS.slice(lastIndex);
+              if (sentences) speakText(sentences);
+            }
+          }
+        } catch (_) {}
+      }
+    }
+
+    // Flush any remaining text that didn't end with punctuation
+    if (pendingTTS.trim()) speakText(pendingTTS.trim());
+
+    customProvider.chatHistory.push({ role: 'assistant', content: fullResponse });
+  } catch (err) {
+    console.error('LLM call failed:', err);
+    updateTextMesh('LLM connection error: ' + err.message);
+  }
+}
+
+// Synthesis is chained rather than fired in parallel, so a short sentence can't
+// come back before a longer one that preceded it and get spoken out of order.
+function speakText(text) {
+  const session = customProvider.session;
+  customProvider.ttsChain = customProvider.ttsChain
+    .then(async () => {
+      if (session !== customProvider.session) return;
+      const audio = await synthesize(text, customProvider.settings);
+      if (session !== customProvider.session) return;
+      console.log(`[TTS] received ${audio.byteLength} bytes`);
+      customProvider.ttsAudioQueue.push(audio);
+      if (!customProvider.ttsPlaying) playNextTTSChunk();
+    })
+    .catch((err) => console.error('[TTS] synthesis failed:', err.message));
+}
+
+// Stop playback cleanly. Every exit path out of playNextTTSChunk must go through
+// here: leaving ttsPlaying true blocks all further playback for the session and
+// leaves the render loop driving the mouth from an analyser that never updates.
+function stopTTSPlayback() {
+  customProvider.ttsPlaying = false;
+  if (currentVrm) currentVrm.expressionManager.setValue('aa', 0);
+}
+
+function playNextTTSChunk() {
+  const ctx = customProvider.ttsAudioCtx;
+
+  // Session torn down — drop anything still queued, it can never be decoded now.
+  if (!ctx || ctx.state === 'closed') {
+    customProvider.ttsAudioQueue = [];
+    stopTTSPlayback();
+    return;
+  }
+
+  if (customProvider.ttsAudioQueue.length === 0) {
+    stopTTSPlayback();
+    return;
+  }
+
+  customProvider.ttsPlaying = true;
+  const buffer = customProvider.ttsAudioQueue.shift();
+  ctx.decodeAudioData(buffer, (audioBuffer) => {
+    // The context can also close while this decode is in flight.
+    if (!customProvider.ttsAudioCtx || customProvider.ttsAudioCtx.state === 'closed') {
+      customProvider.ttsAudioQueue = [];
+      stopTTSPlayback();
+      return;
+    }
+    const source = customProvider.ttsAudioCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(customProvider.analyser);
+    source.onended = playNextTTSChunk;
+    source.start();
+  }, (err) => {
+    console.error('Audio decode error:', err);
+    playNextTTSChunk();
+  });
 }
 
 let textMesh;

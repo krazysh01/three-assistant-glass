@@ -18,6 +18,41 @@ Customizable 3D conversational AI character
 - Function Calling
 - Audio Recording
 
+### Custom Agent
+
+- Local AI via custom endpoints
+- OpenAI-compatible speech endpoints for STT (`/v1/audio/transcriptions`) and TTS (`/v1/audio/speech`) — works with [Speaches](https://speaches.ai), Kokoro-FastAPI, LocalAI, or OpenAI itself
+- Custom OpenAI-compatible endpoint for LLM
+
+Settings are layered. `settings.json` on the server holds the deployment's
+defaults, shared by every client; anything a user changes is saved in their own
+browser as an override, and effective settings are the defaults with those
+overrides on top.
+
+So a shared private deployment can be configured centrally once and every browser
+picks it up with no setup, while any user can still change values for themselves.
+A deployment with nothing pre-configured works too — the client supplies
+everything. Changing a default on the server reaches every client that hasn't
+overridden that particular key, and the settings page has a reset that drops a
+browser's overrides so it follows the defaults again.
+
+Because `settings.json` is served to every client as the defaults, only put
+credentials there that you're happy for all of them to use; otherwise leave those
+fields empty and let each user enter their own.
+
+`hostClipboardBroadcast` is the exception, and is not in the settings UI. It makes
+the server read the clipboard of **the machine it runs on** and send it to every
+connected browser once a second — so it only makes sense when the server and the
+browser are the same device. Enable it by setting `"hostClipboardBroadcast": true`
+in `settings.json`. It is off by default, and when off nothing polls the clipboard
+at all.
+
+The browser calls the LLM, STT and TTS endpoints directly, so each service must
+allow the app's origin via CORS. On [Speaches](https://speaches.ai) that is the
+`ALLOW_ORIGINS` variable, which takes a JSON array — `["http://localhost:3000"]`,
+or `["*"]` to allow any origin. A service that isn't configured for CORS will
+have its requests blocked by the browser.
+
 ### Character - [three-vrm](https://github.com/pixiv/three-vrm)
 
 - Custom 3D model ([vrm](https://hub.vroid.com/en))

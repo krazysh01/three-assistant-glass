@@ -52,7 +52,8 @@ app.get('/vapi-web-bundle.min.js', (req, res) => {
 
 // Load or create settings.json
 const settingsPath = path.join(__dirname, 'settings.json');
-let settings = { clipboardAccess: false };
+const exampleSettingsPath = path.join(__dirname, 'settings.example.json');
+let settings = { hostClipboardBroadcast: false };
 
 async function loadOrCreateSettings() {
   try {
@@ -61,6 +62,11 @@ async function loadOrCreateSettings() {
     settings = JSON.parse(data);
   } catch (error) {
     if (error.code === 'ENOENT') {
+      // settings.json is gitignored, so seed fresh installs from the committed example
+      try {
+        const exampleData = await fs.readFile(exampleSettingsPath, 'utf8');
+        settings = JSON.parse(exampleData);
+      } catch (_) {}
       await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2));
     } else {
       console.error('Error accessing settings file:', error);
@@ -76,23 +82,8 @@ app.get('/settings', (req, res) => {
   res.sendFile(path.join(__dirname, 'settings.html'));
 });
 
-// Add a new route to get and set the clipboard access setting
-app.get('/api/settings/clipboard', (req, res) => {
-  res.json({ clipboardAccess: settings.clipboardAccess });
-});
-
-app.post('/api/settings/clipboard', express.json(), async (req, res) => {
-  settings.clipboardAccess = req.body.clipboardAccess;
-  try {
-    await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2));
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error writing settings:', error);
-    res.status(500).json({ error: 'Unable to update settings' });
-  }
-});
-
-// Modify the /api/settings route
+// Seed values for a browser with no settings of its own. Settings are stored
+// per-browser in localStorage; the server holds no per-user state beyond this.
 app.get('/api/settings', async (req, res) => {
   try {
     const settingsData = await fs.readFile(settingsPath, 'utf8');
@@ -100,33 +91,6 @@ app.get('/api/settings', async (req, res) => {
   } catch (error) {
     console.error('Error reading settings:', error);
     res.status(500).json({ error: 'Unable to read settings' });
-  }
-});
-
-app.post('/api/settings', express.json(), async (req, res) => {
-  try {
-    const currentSettings = { ...settings };
-    
-    // Update all possible settings
-    const possibleSettings = [
-      'clipboardAccess', 'vapiPublicKey', 'vapiPrivateKey',
-      'showTime', 'timeFormat', 'freeCamera', 'sceneDebug',
-      'dragDropSupport', 'vrmDebug', 'animationPicker', 'idleAnimation',
-      'characterName', 'assistantID', 'settingsIconToggle', 'assistantShortcut'  // Add assistantShortcut here
-    ];
-
-    possibleSettings.forEach(setting => {
-      if (req.body[setting] !== undefined) {
-        currentSettings[setting] = req.body[setting];
-      }
-    });
-    
-    await fs.writeFile(settingsPath, JSON.stringify(currentSettings, null, 2));
-    settings = currentSettings;
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error updating settings:', error);
-    res.status(500).json({ error: 'Unable to update settings' });
   }
 });
 
@@ -179,6 +143,9 @@ app.post('/api/upload-characters', upload.array('characters'), async (req, res) 
 });
 
 const server = http.createServer(app);
+
+// General WebSocket server (clipboard, etc.). Speech no longer passes through
+// here - the browser calls the STT/TTS services directly.
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws) => {
@@ -189,26 +156,41 @@ wss.on('connection', (ws) => {
   });
 });
 
+
 let lastClipboardContent = '';
 
-// Modify the clipboard checking interval
+// Broadcast the HOST MACHINE's clipboard to every connected browser.
+//
+// clipboardy reads the clipboard of the machine running this server, and the
+// result goes to all clients, so this is only meaningful when the server and
+// the browser are the same device. It is not a per-user preference and is not
+// exposed in the settings UI: enabling it for a remote client would send them
+// whatever is copied on the host, once a second. Turn it on by setting
+// "hostClipboardBroadcast": true in settings.json.
 const checkClipboard = () => {
-  if (settings.clipboardAccess) {
-    clipboardy.read().then(text => {
-      if (text !== lastClipboardContent) {
-        console.log('Clipboard changed:', text);
-        lastClipboardContent = text;
-        wss.clients.forEach((client) => {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({ type: 'clipboard', content: text }));
-          }
-        });
-      }
-    }).catch(console.error);
-  }
+  clipboardy.read().then(text => {
+    if (text !== lastClipboardContent) {
+      console.log('[clipboard] host clipboard changed, broadcasting to clients');
+      lastClipboardContent = text;
+      wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({ type: 'clipboard', content: text }));
+        }
+      });
+    }
+  }).catch(console.error);
 };
 
-setInterval(checkClipboard, 1000);
+// Resolved once at startup - there is no way to change it at runtime, so when
+// it is off nothing polls the clipboard at all.
+// clipboardAccess is the pre-rename key, still honoured.
+if (settings.hostClipboardBroadcast ?? settings.clipboardAccess) {
+  console.warn(
+    `[clipboard] hostClipboardBroadcast is ON: the clipboard of THIS machine will be `
+    + `sent to every browser connected to this server, once a second.`
+  );
+  setInterval(checkClipboard, 1000);
+}
 
 server.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
