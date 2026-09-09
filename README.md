@@ -24,6 +24,16 @@ Customizable 3D conversational AI character
 - OpenAI-compatible speech endpoints for STT (`/v1/audio/transcriptions`) and TTS (`/v1/audio/speech`) — works with [Speaches](https://speaches.ai), Kokoro-FastAPI, LocalAI, or OpenAI itself
 - Custom OpenAI-compatible endpoint for LLM
 
+Settings are stored per-browser in `localStorage`, so each user keeps their own
+configuration and their own credentials. A browser with no settings yet is seeded
+once from the server's `settings.json`; after that the server holds no per-user
+state. If you host this for more than one person, leave the credential fields in
+`settings.json` empty — it seeds every new browser.
+
+`clipboardAccess` is the exception. It lets the server read the *host machine's*
+clipboard and broadcast it to every connected client, so it stays server-side and
+is off by default.
+
 The browser calls the LLM, STT and TTS endpoints directly, so each service must
 allow the app's origin via CORS. On [Speaches](https://speaches.ai) that is the
 `ALLOW_ORIGINS` variable, which takes a JSON array — `["http://localhost:3000"]`,

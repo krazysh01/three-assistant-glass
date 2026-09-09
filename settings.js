@@ -1,3 +1,6 @@
+import { loadSettings, saveSetting, getClipboardAccess, setClipboardAccess }
+  from './settings-store.mjs';
+
 document.querySelectorAll('.settings-tab-button').forEach(button => {
     button.addEventListener('click', () => {
         document.querySelectorAll('.settings-tab-button, .tab-content, .settings-tab-item').forEach(el => el.classList.remove('active'));
@@ -12,20 +15,10 @@ document.querySelectorAll('.settings-tab-button').forEach(button => {
 
 const clipboardAccessToggle = document.getElementById('clipboardAccessToggle');
 
-fetch('/api/settings/clipboard')
-    .then(response => response.json())
-    .then(data => {
-        clipboardAccessToggle.checked = data.clipboardAccess;
-    });
+getClipboardAccess().then((enabled) => { clipboardAccessToggle.checked = enabled; });
 
 clipboardAccessToggle.addEventListener('change', () => {
-    fetch('/api/settings/clipboard', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ clipboardAccess: clipboardAccessToggle.checked }),
-    });
+    setClipboardAccess(clipboardAccessToggle.checked);
 });
 
 document.querySelectorAll('.toggle-visibility').forEach(button => {
@@ -80,18 +73,7 @@ async function loadCharacters() {
 // Function to select a character
 async function selectCharacter(name) {
     try {
-        const response = await fetch('/api/settings', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ characterName: name }),
-        });
-        
-        if (!response.ok) {
-            throw new Error('Failed to save character name');
-        }
-        
+        await saveSetting('characterName', name);
         document.getElementById('characterName').textContent = name;
     } catch (error) {
         console.error('Error selecting character:', error);
@@ -112,11 +94,9 @@ function updateProviderUI(provider) {
     }
 }
 
-// Function to load settings
-async function loadSettings() {
-    const response = await fetch('/api/settings');
-    const settings = await response.json();
-    clipboardAccessToggle.checked = settings.clipboardAccess;
+// Populate the form fields from the stored settings
+async function populateSettingsForm() {
+    const settings = await loadSettings(true);
     document.getElementById('publicKey').value = settings.vapiPublicKey || '';
     document.getElementById('privateKey').value = settings.vapiPrivateKey || '';
     
@@ -180,19 +160,13 @@ async function saveSettings(key, value) {
         default:
             break;
     }
-    await fetch('/api/settings', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ [key]: value }),
-    });
+    await saveSetting(key, value);
 }
 
 // Function to load assistants from Vapi
 async function loadAssistants() {
     try {
-        const settings = await fetch('/api/settings').then(res => res.json());
+        const settings = await loadSettings(true);
 
         // Only load VAPI assistants when using the VAPI provider
         if ((settings.assistantProvider || 'vapi') !== 'vapi') return;
@@ -258,14 +232,14 @@ document.getElementById('assistantIDSelect').addEventListener('change', async (e
     const assistantID = e.target.value;
     await saveSettings('assistantID', assistantID);
 
-    const settings = await fetch('/api/settings').then(res => res.json());
+    const settings = await loadSettings(true);
     await updateAssistantInfo(assistantID, settings.vapiPrivateKey);
 });
 
 // Modify the initializePage function
 async function initializePage() {
     await loadAnimations();
-    await loadSettings();
+    await populateSettingsForm();
     await loadCharacters();
     await loadAssistants();
 }
@@ -273,9 +247,6 @@ async function initializePage() {
 // Call initializePage when the page loads
 initializePage();
 
-clipboardAccessToggle.addEventListener('change', () => {
-    saveSettings('clipboardAccess', clipboardAccessToggle.checked);
-});
 
 document.querySelectorAll('.save-button').forEach(button => {
     button.addEventListener('click', () => {

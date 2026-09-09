@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 import { loadMixamoAnimation } from './loadMixamoAnimation.js';
 import { createUtteranceDetector, floatToPcm16, transcribe, synthesize } from './speech.mjs';
+import { loadSettings, onSettingsChanged } from './settings-store.mjs';
 import { SVGLoader } from 'three/addons/loaders/SVGLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { LookingGlassWebXRPolyfill, LookingGlassConfig } from "@lookingglass/webxr"
@@ -89,8 +90,7 @@ const customProvider = {
 // Add this function to fetch settings
 async function fetchSettings() {
     try {
-        const response = await fetch('/api/settings');
-        currentSettings = await response.json();
+        currentSettings = await loadSettings(true);
         if (currentSettings.characterName) {
             defaultModelUrl = `characters/${currentSettings.characterName}.vrm`;
         }
@@ -99,24 +99,22 @@ async function fetchSettings() {
     }
 }
 
-// Add this function to check for settings changes
-function checkSettingsChanges() {
-  fetch('/api/settings')
-    .then(response => response.json())
-    .then(newSettings => {
-      if (JSON.stringify(newSettings) !== JSON.stringify(currentSettings)) {
-        console.log('Settings have changed. Reloading page...');
-        location.reload();
-      }
-    })
-    .catch(error => console.error('Error checking settings:', error));
+// Reload when the settings page (another tab) changes settings. localStorage's
+// storage event fires only in other tabs, which is exactly what's wanted here,
+// and replaces what used to be a poll of /api/settings twice a second.
+function watchSettingsChanges() {
+  onSettingsChanged((newSettings) => {
+    if (JSON.stringify(newSettings) !== JSON.stringify(currentSettings)) {
+      console.log('Settings have changed. Reloading page...');
+      location.reload();
+    }
+  });
 }
 
 // Add this function to get the vrmDebug setting
 async function getVrmDebugSetting() {
   try {
-    const response = await fetch('/api/settings');
-    const settings = await response.json();
+    const settings = await loadSettings();
     return settings.vrmDebug || false;
   } catch (error) {
     console.error('Error fetching vrmDebug setting:', error);
@@ -127,8 +125,7 @@ async function getVrmDebugSetting() {
 // Add this function to get the current idle animation from settings
 async function getCurrentIdleAnimation() {
     try {
-        const response = await fetch('/api/settings');
-        const settings = await response.json();
+        const settings = await loadSettings();
         return settings.idleAnimation ? `animations/${settings.idleAnimation}` : 'animations/idleFemale.fbx';
     } catch (error) {
         console.error('Error fetching idle animation from settings:', error);
@@ -139,8 +136,7 @@ async function getCurrentIdleAnimation() {
 // Add this function to get the settingsIconToggle setting
 async function getSettingsIconToggle() {
   try {
-    const response = await fetch('/api/settings');
-    const settings = await response.json();
+    const settings = await loadSettings();
     return settings.settingsIconToggle || false;
   } catch (error) {
     console.error('Error fetching settingsIconToggle setting:', error);
@@ -299,7 +295,7 @@ async function initializeApp() {
   // ... rest of the initialization code ...
 
   // Set up an interval to check for settings changes
-  setInterval(checkSettingsChanges, 500); // Check every .5 seconds
+  watchSettingsChanges();
 
   // Load gears if enabled
   await loadGearsIfEnabled();
@@ -783,8 +779,7 @@ let assistantId;
 // Add this function to get the assistantID from settings
 async function getAssistantId() {
   try {
-    const response = await fetch('/api/settings');
-    const settings = await response.json();
+    const settings = await loadSettings();
     return settings.assistantID || '';
   } catch (error) {
     console.error('Error fetching assistantID:', error);
@@ -795,8 +790,7 @@ async function getAssistantId() {
 // Add this function to get the Vapi public key from settings
 async function getVapiPublicKey() {
   try {
-    const response = await fetch('/api/settings');
-    const settings = await response.json();
+    const settings = await loadSettings();
     return settings.vapiPublicKey || '';
   } catch (error) {
     console.error('Error fetching Vapi public key:', error);
@@ -878,8 +872,7 @@ function sendSystemMessageToVapi(content) {
 
 // Update the socket.onmessage function
 window.addEventListener('load', async () => {
-  const response = await fetch('/api/settings');
-  const settings = await response.json();
+  const settings = await loadSettings();
 
   const provider = settings.assistantProvider || 'vapi';
   if (provider === 'vapi') {
@@ -920,7 +913,7 @@ let assistantActive = false;
 
 async function toggleAssistant() {
   const toggleButton = document.getElementById('toggleVapi');
-  const settings = await fetch('/api/settings').then(r => r.json());
+  const settings = await loadSettings();
   const provider = settings.assistantProvider || 'vapi';
 
   if (assistantActive) {

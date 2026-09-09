@@ -98,7 +98,8 @@ app.post('/api/settings/clipboard', express.json(), async (req, res) => {
   }
 });
 
-// Modify the /api/settings route
+// Seed values for a browser with no settings of its own. Settings are stored
+// per-browser in localStorage; the server holds no per-user state beyond this.
 app.get('/api/settings', async (req, res) => {
   try {
     const settingsData = await fs.readFile(settingsPath, 'utf8');
@@ -106,37 +107,6 @@ app.get('/api/settings', async (req, res) => {
   } catch (error) {
     console.error('Error reading settings:', error);
     res.status(500).json({ error: 'Unable to read settings' });
-  }
-});
-
-app.post('/api/settings', express.json(), async (req, res) => {
-  try {
-    const currentSettings = { ...settings };
-    
-    // Update all possible settings
-    const possibleSettings = [
-      'clipboardAccess', 'vapiPublicKey', 'vapiPrivateKey',
-      'showTime', 'timeFormat', 'freeCamera', 'sceneDebug',
-      'dragDropSupport', 'vrmDebug', 'animationPicker', 'idleAnimation',
-      'characterName', 'assistantID', 'settingsIconToggle', 'assistantShortcut',
-      'assistantProvider', 'customLLMBaseUrl', 'customLLMApiKey', 'customLLMModel',
-      'customSystemPrompt', 'customFirstMessage',
-      'sttBaseUrl', 'sttApiKey', 'sttModel',
-      'ttsBaseUrl', 'ttsApiKey', 'ttsModel', 'ttsVoice',
-    ];
-
-    possibleSettings.forEach(setting => {
-      if (req.body[setting] !== undefined) {
-        currentSettings[setting] = req.body[setting];
-      }
-    });
-    
-    await fs.writeFile(settingsPath, JSON.stringify(currentSettings, null, 2));
-    settings = currentSettings;
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error updating settings:', error);
-    res.status(500).json({ error: 'Unable to update settings' });
   }
 });
 
