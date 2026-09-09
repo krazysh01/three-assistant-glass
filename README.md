@@ -23,41 +23,37 @@ Customizable 3D conversational AI character
 - Local AI via custom endpoints
 - OpenAI-compatible speech endpoints for STT (`/v1/audio/transcriptions`) and TTS (`/v1/audio/speech`) — works with [Speaches](https://speaches.ai), Kokoro-FastAPI, LocalAI, or OpenAI itself
 - Custom OpenAI-compatible endpoint for LLM
+- Replies are streamed and spoken sentence by sentence, so the character starts
+  talking while the model is still writing
+- On-device voice activity detection ([Silero](https://github.com/ricky0123/vad)),
+  with barge-in: start talking and the character stops to listen
+- Speech can also run entirely in the browser — Chrome's Web Speech for
+  listening, [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX)
+  or the OS voices for speaking — so a laptop with a local model needs no speech
+  server at all
 
-Settings are layered. `settings.json` on the server holds the deployment's
-defaults, shared by every client; anything a user changes is saved in their own
-browser as an override, and effective settings are the defaults with those
-overrides on top.
+Everything in this pipeline runs in the browser. The app server only serves the
+page, the character files and the clipboard bridge; it never sees the
+conversation, the audio or the keys.
 
-So a shared private deployment can be configured centrally once and every browser
-picks it up with no setup, while any user can still change values for themselves.
-A deployment with nothing pre-configured works too — the client supplies
-everything. Changing a default on the server reaches every client that hasn't
-overridden that particular key, and the settings page has a reset that drops a
-browser's overrides so it follows the defaults again.
+#### Speech and language providers
 
-Because `settings.json` is served to every client as the defaults, only put
-credentials there that you're happy for all of them to use; otherwise leave those
-fields empty and let each user enter their own.
+Set these in **Settings → Assistant**. Speech-to-text and text-to-speech are
+chosen separately, so you can mix them.
 
-`hostClipboardBroadcast` is the exception, and is not in the settings UI. It makes
-the server read the clipboard of **the machine it runs on** and send it to every
-connected browser once a second — so it only makes sense when the server and the
-browser are the same device. Enable it by setting `"hostClipboardBroadcast": true`
-in `settings.json`. It is off by default, and when off nothing polls the clipboard
-at all.
+| | Speech to text | Text to speech |
+|---|---|---|
+| **OpenAI-compatible** | `POST /v1/audio/transcriptions` | `POST /v1/audio/speech` |
+| **Browser** | Chrome Web Speech (audio goes to Google) | OS voices via `speechSynthesis` |
+| **Kokoro** | — | in-browser Kokoro-82M, free and offline after a one-time 90–330 MB download |
 
-The settings page suggests models and voices from each endpoint's `/v1/models`.
-How much it can offer depends on the server: `task` and `voices` are extensions
-that [Speaches](https://speaches.ai) provides and the OpenAI API does not, so
-against Speaches you get filtered model lists and every voice a model supports,
-against OpenAI you get the model list plus the documented voices for known TTS
-models, and against anything else the fields stay plain text. Suggestions are
-never a constraint — any value can still be typed, since a bundled list goes
-stale as soon as a provider adds a voice.
+The quick-setup buttons fill in a working combination for OpenAI, Ollama, LM
+Studio, Speaches, or fully in-browser speech; every field stays editable
+afterwards.
 
 The browser calls the LLM, STT and TTS endpoints directly, so each service must
-allow the app's origin via CORS. On [Speaches](https://speaches.ai) that is the
+allow the app's origin via CORS. (The in-browser speech providers need no
+endpoint, so they need no CORS either.) On [Speaches](https://speaches.ai) that is the
 `ALLOW_ORIGINS` variable, which takes a JSON array — `["http://localhost:3000"]`,
 or `["*"]` to allow any origin. A service that isn't configured for CORS will
 have its requests blocked by the browser.
@@ -78,7 +74,7 @@ have its requests blocked by the browser.
 
 ### Possible future features
 
-- Show current time
+- Realtime speech-to-speech providers as a third option alongside Vapi and Custom
 - Add setting to change size/scale of character
 - Add setting to move character backwards or forwards
 
@@ -115,7 +111,22 @@ have its requests blocked by the browser.
 
 7. Pick a character model and voice assistant ([Create an assistant on Vapi](https://dashboard.vapi.ai/assistants) first if you haven't already)
 
-8. Go back to http://localhost:3000/settings and click ▶️ to start the assistant
+8. Go back to http://localhost:3000/ and press **Start** to begin the assistant
+
+To run on a different port, set `THREE_ASSISTANT_PORT`:
+
+```
+THREE_ASSISTANT_PORT=3010 npm start
+```
+
+### Tests
+
+```
+npm test
+```
+
+Covers the assistant pipeline, the speech queue and the streaming chat parser.
+No network and no dependencies beyond the ones already installed.
 
 ## View on a Looking Glass Display
 

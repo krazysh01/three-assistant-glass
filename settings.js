@@ -2,6 +2,7 @@ import { loadSettings, saveSetting, saveSettings, clearAllOverrides, getDefaults
   from './settings-store.mjs';
 import { fetchModels, sttModels, ttsModels, voicesFor, describeVoice, describeLanguages, fillDatalist }
   from './model-catalog.mjs';
+import { KOKORO_VOICES } from './assistant/kokoro.js';
 
 document.querySelectorAll('.settings-tab-button').forEach(button => {
     button.addEventListener('click', () => {
@@ -77,15 +78,69 @@ async function selectCharacter(name) {
 
 // Function to show/hide provider-specific UI sections
 function updateProviderUI(provider) {
-    const vapiSection = document.getElementById('vapiAssistantSection');
-    const customSection = document.getElementById('customAssistantSection');
-    if (provider === 'custom') {
-        vapiSection.style.display = 'none';
-        customSection.style.display = 'block';
-    } else {
-        vapiSection.style.display = 'block';
-        customSection.style.display = 'none';
+    document.getElementById('vapiAssistantSection').hidden = provider === 'custom';
+    document.getElementById('customAssistantSection').hidden = provider !== 'custom';
+}
+
+const showAll = (selector, visible) => {
+    document.querySelectorAll(selector).forEach(el => { el.hidden = !visible; });
+};
+
+// The speech providers that run in the browser need no endpoint, so their
+// URL/model/key rows are hidden rather than left there to be filled in vain.
+function updateSpeechProviderUI() {
+    const stt = document.getElementById('sttProvider').value || 'openai';
+    showAll('.stt-server-only', stt === 'openai');
+    showAll('.stt-browser-only', stt === 'browser');
+
+    const tts = document.getElementById('ttsProvider').value || 'openai';
+    showAll('.tts-server-only', tts === 'openai');
+    showAll('.tts-kokoro-only', tts === 'kokoro');
+    showAll('.tts-browser-only', tts === 'browser');
+
+    refreshVoiceSuggestions();
+}
+
+// Sensible starting points. Only the fields a preset actually knows about are
+// touched, so switching preset never silently wipes an unrelated setting.
+const PRESETS = {
+    openai: {
+        customLLMBaseUrl: 'https://api.openai.com/v1', customLLMModel: 'gpt-4o-mini',
+        sttProvider: 'openai', sttBaseUrl: 'https://api.openai.com/v1', sttModel: 'whisper-1',
+        ttsProvider: 'openai', ttsBaseUrl: 'https://api.openai.com/v1', ttsModel: 'tts-1', ttsVoice: 'alloy',
+    },
+    ollama: {
+        customLLMBaseUrl: 'http://localhost:11434/v1', customLLMModel: 'llama3',
+        sttProvider: 'browser',
+        ttsProvider: 'kokoro', ttsVoice: 'af_heart',
+    },
+    lmstudio: {
+        customLLMBaseUrl: 'http://localhost:1234/v1', customLLMModel: '',
+        sttProvider: 'browser',
+        ttsProvider: 'kokoro', ttsVoice: 'af_heart',
+    },
+    speaches: {
+        sttProvider: 'openai', sttBaseUrl: 'http://localhost:8000/v1', sttModel: 'Systran/faster-whisper-small',
+        ttsProvider: 'openai', ttsBaseUrl: 'http://localhost:8000/v1',
+        ttsModel: 'speaches-ai/Kokoro-82M-v1.0-ONNX', ttsVoice: 'af_heart',
+    },
+    offline: {
+        sttProvider: 'browser',
+        ttsProvider: 'kokoro', ttsVoice: 'af_heart',
+    },
+};
+
+function applyPreset(name) {
+    const preset = PRESETS[name];
+    if (!preset) return;
+    for (const [key, value] of Object.entries(preset)) {
+        const field = FIELDS.find(f => f.key === key);
+        const el = field && fieldEl(field);
+        if (el) el.value = value;
     }
+    updateSpeechProviderUI();
+    refreshSaveState();
+    refreshAllSuggestions();
 }
 
 // Populate the form fields from the stored settings
@@ -139,6 +194,15 @@ async function populateSettingsForm() {
     document.getElementById('ttsModel').value = settings.ttsModel || '';
     document.getElementById('ttsVoice').value = settings.ttsVoice || '';
     document.getElementById('ttsApiKey').value = settings.ttsApiKey || '';
+
+    // Speech providers, conversation and expressions
+    document.getElementById('sttProvider').value = settings.sttProvider || 'openai';
+    document.getElementById('ttsProvider').value = settings.ttsProvider || 'openai';
+    document.getElementById('ttsSpeed').value = settings.ttsSpeed ?? '';
+    document.getElementById('assistantLanguage').value = settings.assistantLanguage || '';
+    // Interruption is on unless it was explicitly turned off.
+    document.getElementById('bargeIn').checked = settings.bargeIn !== false;
+    updateSpeechProviderUI();
 }
 
 
@@ -253,7 +317,22 @@ const FIELDS = [
     { key: 'ttsModel',           id: 'ttsModel',             type: 'value' },
     { key: 'ttsVoice',           id: 'ttsVoice',             type: 'value' },
     { key: 'ttsApiKey',          id: 'ttsApiKey',            type: 'value' },
+    { key: 'sttProvider',        id: 'sttProvider',          type: 'value' },
+    { key: 'ttsProvider',        id: 'ttsProvider',          type: 'value' },
+    { key: 'ttsSpeed',           id: 'ttsSpeed',             type: 'value', validate: validateSpeed },
+    { key: 'assistantLanguage',  id: 'assistantLanguage',    type: 'value' },
+    { key: 'bargeIn',            id: 'bargeIn',              type: 'checkbox' },
 ];
+
+// Blank means "provider default". Anything else has to be a number the
+// synthesis request can carry, and wildly out of range reads as a typo.
+function validateSpeed(value) {
+    if (!value.trim()) return null;
+    const speed = Number(value);
+    if (!Number.isFinite(speed)) return 'Enter a number, e.g. 1.0';
+    if (speed < 0.5 || speed > 2) return 'Speed must be between 0.5 and 2.0';
+    return null;
+}
 
 // Empty is allowed everywhere - the client falls back to a default endpoint -
 // but a non-empty base URL that cannot be parsed would fail silently at request
@@ -299,13 +378,21 @@ function noteSuggestions(id, count, what) {
 async function refreshSpeechSuggestions() {
     const s = await loadSettings();
 
-    const stt = await fetchModels(s.sttBaseUrl, s.sttApiKey);
+    // Only an OpenAI-compatible endpoint has a catalogue to advertise; the
+    // in-browser providers carry their own fixed voice lists.
+    const sttIsEndpoint = (document.getElementById('sttProvider')?.value || 'openai') === 'openai';
+    const ttsIsEndpoint = (document.getElementById('ttsProvider')?.value || 'openai') === 'openai';
+
+    const stt = sttIsEndpoint ? await fetchModels(s.sttBaseUrl, s.sttApiKey) : [];
     noteSuggestions('sttModel', fillDatalist(
         document.getElementById('sttModelList'),
         sttModels(stt).map(m => ({ value: m.id, label: describeLanguages(m.language) })),
     ), 'models');
 
-    ttsCatalog = s.ttsBaseUrl === s.sttBaseUrl ? stt : await fetchModels(s.ttsBaseUrl, s.ttsApiKey);
+    // Reuse the STT catalogue only when it was actually fetched from the same place.
+    if (!ttsIsEndpoint) ttsCatalog = [];
+    else if (sttIsEndpoint && s.ttsBaseUrl === s.sttBaseUrl) ttsCatalog = stt;
+    else ttsCatalog = await fetchModels(s.ttsBaseUrl, s.ttsApiKey);
     noteSuggestions('ttsModel', fillDatalist(
         document.getElementById('ttsModelList'),
         ttsModels(ttsCatalog).map(m => ({ value: m.id, label: m.sample_rate ? `${m.sample_rate} Hz` : '' })),
@@ -314,16 +401,37 @@ async function refreshSpeechSuggestions() {
     refreshVoiceSuggestions();
 }
 
-// Voices depend on the selected TTS model: Kokoro carries dozens, each Piper
-// model exactly one, so this reruns whenever the model field changes.
+// Voices depend on the selected TTS provider and model: Kokoro carries dozens,
+// each Piper model exactly one, and the OS exposes whatever is installed. This
+// reruns whenever the provider or model field changes.
 function refreshVoiceSuggestions() {
+    const list = document.getElementById('ttsVoiceList');
+    const provider = document.getElementById('ttsProvider')?.value || 'openai';
+
+    if (provider === 'kokoro') {
+        noteSuggestions('ttsVoice', fillDatalist(list, KOKORO_VOICES.map(v => ({ value: v, label: '' }))), 'voices');
+        return;
+    }
+    if (provider === 'browser') {
+        // getVoices() is empty until the OS list has loaded; the voiceschanged
+        // event fires once it has, and re-entering here fills the datalist.
+        const voices = window.speechSynthesis?.getVoices() || [];
+        noteSuggestions('ttsVoice', fillDatalist(
+            list,
+            voices.map(v => ({ value: v.name, label: v.lang || '' })),
+        ), 'voices');
+        return;
+    }
+
     const modelId = document.getElementById('ttsModel')?.value;
     const voices = voicesFor(ttsCatalog, modelId);
     noteSuggestions('ttsVoice', fillDatalist(
-        document.getElementById('ttsVoiceList'),
+        list,
         voices.map(v => ({ value: v.name, label: describeVoice(v) })),
     ), 'voices');
 }
+
+window.speechSynthesis?.addEventListener?.('voiceschanged', refreshVoiceSuggestions);
 
 async function refreshLlmSuggestions() {
     const s = await loadSettings();
@@ -337,6 +445,25 @@ async function refreshLlmSuggestions() {
 async function refreshAllSuggestions() {
     await Promise.all([refreshSpeechSuggestions(), refreshLlmSuggestions()]);
 }
+
+document.getElementById('sttProvider')?.addEventListener('change', () => {
+    updateSpeechProviderUI();
+    refreshSaveState();
+    refreshSpeechSuggestions();
+});
+
+document.getElementById('ttsProvider')?.addEventListener('change', () => {
+    // af_heart means nothing to an OS voice list, and vice versa.
+    const voice = document.getElementById('ttsVoice');
+    if (voice) voice.value = '';
+    updateSpeechProviderUI();
+    refreshSaveState();
+    refreshSpeechSuggestions();
+});
+
+document.querySelectorAll('.preset-button').forEach(button => {
+    button.addEventListener('click', () => applyPreset(button.dataset.preset));
+});
 
 document.getElementById('ttsModel')?.addEventListener('change', () => {
     // A voice belongs to a model: Kokoro's af_heart means nothing to a Piper

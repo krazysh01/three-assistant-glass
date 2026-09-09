@@ -26,5 +26,10 @@
   "ttsBaseUrl": "",
   "ttsApiKey": "",
   "ttsModel": "",
-  "ttsVoice": ""
+  "ttsVoice": "",
+  "sttProvider": "openai",
+  "ttsProvider": "openai",
+  "ttsSpeed": 1,
+  "assistantLanguage": "",
+  "bargeIn": true
 }
