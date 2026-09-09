@@ -154,9 +154,13 @@ have its requests blocked by the browser.
    ```
 5. http://localhost:3000/ should open automatically
 
-6. Open Settings and save your [Vapi keys](https://dashboard.vapi.ai/org/api-keys)
+6. Open Settings, pick a character on the **Characters** tab, then open the
+   **Assistant** tab and choose a provider
 
-7. Pick a character model and voice assistant ([Create an assistant on Vapi](https://dashboard.vapi.ai/assistants) first if you haven't already)
+7. For Vapi: paste your [keys](https://dashboard.vapi.ai/org/api-keys) into the
+   same tab and pick an assistant ([create one](https://dashboard.vapi.ai/assistants)
+   first if you haven't already). For Custom: use a quick-setup preset or fill in
+   the endpoints yourself
 
 8. Go back to http://localhost:3000/ and press **Start** to begin the assistant
 

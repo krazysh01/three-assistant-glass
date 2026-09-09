@@ -213,6 +213,8 @@ textarea.invalid {
   line-height: 1.45;
   color: var(--muted);
 }
+.hint.error { color: var(--rose); }
+.hint:empty { display: none; }
 .row.stacked { grid-template-columns: minmax(0, 1fr); }
 .row.stacked .row-label { margin-bottom: 2px; }
 

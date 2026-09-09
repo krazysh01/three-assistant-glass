@@ -207,76 +207,118 @@ async function populateSettingsForm() {
 }
 
 
-// Function to load assistants from Vapi
-async function loadAssistants() {
-    try {
-        const settings = await loadSettings(true);
-
-        // Only load VAPI assistants when using the VAPI provider
-        if ((settings.assistantProvider || 'vapi') !== 'vapi') return;
-
-        const vapiPrivateKey = settings.vapiPrivateKey;
-
-        if (!vapiPrivateKey) {
-            console.error('Vapi private key not found in settings');
-            return;
-        }
-
-        const options = {
-            method: 'GET',
-            headers: { Authorization: `Bearer ${vapiPrivateKey}` }
-        };
-
-        const response = await fetch('https://api.vapi.ai/assistant', options);
-        const assistants = await response.json();
-
-        const select = document.getElementById('assistantIDSelect');
-        select.innerHTML = '<option value="">Select an assistant</option>';
-        assistants.forEach(assistant => {
-            const option = document.createElement('option');
-            option.value = assistant.id;
-            option.textContent = assistant.name;
-            select.appendChild(option);
-        });
-
-        // Load the selected assistant from settings
-        if (settings.assistantID) {
-            select.value = settings.assistantID;
-            await updateAssistantInfo(settings.assistantID, vapiPrivateKey);
-        }
-    } catch (err) {
-        console.error('Error loading assistants:', err);
+// The list of assistants comes from Vapi, but the saved assistantID belongs to
+// this browser. Whenever the list cannot be fetched - no key yet, a bad key, no
+// network - the saved value must still be shown and still be selected, or the
+// page silently presents an empty selection and the setting looks lost.
+function setAssistantOptions(assistants, selectedID) {
+    const select = document.getElementById('assistantIDSelect');
+    select.innerHTML = '';
+    select.append(new Option('Select an assistant', ''));
+    for (const assistant of assistants) {
+        select.append(new Option(assistant.name || assistant.id, assistant.id));
     }
+    if (!selectedID) return;
+    // Keeps a saved assistant selected when it is not in the list: the list
+    // failed to load, or the assistant was renamed or deleted on the dashboard.
+    if (![...select.options].some(o => o.value === selectedID)) {
+        select.append(new Option(`${selectedID} (not in your Vapi account)`, selectedID));
+    }
+    select.value = selectedID;
+}
+
+function setSummary(text) {
+    document.querySelector('#modelName .model-text').textContent = text;
+    document.querySelector('#voiceInfo .voice-text').textContent = text;
+    document.getElementById('systemMessage').textContent = text;
+    document.getElementById('firstMessage').textContent = text;
+}
+
+function setListStatus(message, isError = false) {
+    const status = document.getElementById('assistantListStatus');
+    if (!status) return;
+    status.textContent = message;
+    status.classList.toggle('error', isError);
+}
+
+async function loadAssistants() {
+    const settings = await loadSettings(true);
+
+    // Only load Vapi assistants when using the Vapi provider
+    if ((settings.assistantProvider || 'vapi') !== 'vapi') return;
+
+    // Read the fields rather than the store, so a key typed but not yet saved
+    // can still list assistants - which is the order people actually do it in -
+    // and so reloading the list doesn't discard an unsaved choice of assistant.
+    const vapiPrivateKey = document.getElementById('privateKey')?.value || settings.vapiPrivateKey || '';
+    const selectedID = document.getElementById('assistantIDSelect')?.value || settings.assistantID;
+    setAssistantOptions([], selectedID);
+
+    if (!vapiPrivateKey) {
+        setListStatus('Add your Vapi private key above to list your assistants.');
+        setSummary('\u2014');
+        return;
+    }
+
+    setListStatus('Loading assistants\u2026');
+    let assistants;
+    try {
+        const response = await fetch('https://api.vapi.ai/assistant', {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${vapiPrivateKey}` },
+        });
+        if (!response.ok) throw new Error(`Vapi returned ${response.status}`);
+        assistants = await response.json();
+        if (!Array.isArray(assistants)) throw new Error('Unexpected response from Vapi');
+    } catch (err) {
+        console.warn('[vapi] could not list assistants:', err.message);
+        setListStatus(`Could not list assistants (${err.message}). Your saved selection is unchanged.`, true);
+        setSummary('Unavailable');
+        return;
+    }
+
+    setAssistantOptions(assistants, selectedID);
+    setListStatus(assistants.length ? '' : 'This account has no assistants yet.');
+    await updateAssistantInfo(selectedID, vapiPrivateKey);
 }
 
 // Function to update assistant information
 async function updateAssistantInfo(assistantID, vapiPrivateKey) {
-    if (!assistantID) return;
+    if (!assistantID) { setSummary('\u2014'); return; }
+    if (!vapiPrivateKey) { setSummary('Unavailable'); return; }
 
-    const options = {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${vapiPrivateKey}` }
-    };
-
+    setSummary('Loading\u2026');
     try {
-        const response = await fetch(`https://api.vapi.ai/assistant/${assistantID}`, options);
+        const response = await fetch(`https://api.vapi.ai/assistant/${assistantID}`, {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${vapiPrivateKey}` },
+        });
+        if (!response.ok) throw new Error(`Vapi returned ${response.status}`);
         const assistant = await response.json();
 
-        document.querySelector('#modelName .model-text').textContent = assistant.model.model;
-        document.querySelector('#voiceInfo .voice-text').textContent = `${assistant.voice.provider} (${assistant.voice.voiceId})`;
-        document.getElementById('systemMessage').textContent = assistant.model.messages.find(m => m.role === 'system')?.content || 'No system message found';
+        document.querySelector('#modelName .model-text').textContent = assistant.model?.model || 'Unknown';
+        document.querySelector('#voiceInfo .voice-text').textContent = assistant.voice
+            ? `${assistant.voice.provider} (${assistant.voice.voiceId})`
+            : 'Unknown';
+        document.getElementById('systemMessage').textContent =
+            assistant.model?.messages?.find(m => m.role === 'system')?.content || 'No system message found';
         document.getElementById('firstMessage').textContent = assistant.firstMessage || 'No first message found';
     } catch (error) {
-        console.error('Error fetching assistant details:', error);
+        console.warn('[vapi] could not fetch assistant details:', error.message);
+        setSummary('Unavailable');
     }
 }
 
 // Event listener for assistant selection
 document.getElementById('assistantIDSelect').addEventListener('change', async (e) => {
-    const assistantID = e.target.value;
     const settings = await loadSettings();
-    await updateAssistantInfo(assistantID, settings.vapiPrivateKey);
+    await updateAssistantInfo(e.target.value, document.getElementById('privateKey')?.value || settings.vapiPrivateKey);
 });
+
+// The key and the list it unlocks now sit in the same section, so listing can
+// happen as soon as a key is pasted rather than after a save and a reload.
+document.getElementById('privateKey')?.addEventListener('change', () => { void loadAssistants(); });
+document.getElementById('reloadAssistants')?.addEventListener('click', () => { void loadAssistants(); });
 
 // Modify the initializePage function
 async function initializePage() {
