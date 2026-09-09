@@ -21,7 +21,7 @@ Customizable 3D conversational AI character
 ### Custom Agent
 
 - Local AI via custom endpoints
-- Wyoming protocol for STT (faster-whisper) and TTS (piper)
+- OpenAI-compatible speech endpoints for STT (`/v1/audio/transcriptions`) and TTS (`/v1/audio/speech`) — works with [Speaches](https://speaches.ai), Kokoro-FastAPI, LocalAI, or OpenAI itself
 - Custom OpenAI-compatible endpoint for LLM
 
 ### Character - [three-vrm](https://github.com/pixiv/three-vrm)

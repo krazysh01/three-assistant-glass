@@ -3,14 +3,12 @@ import path from 'path';
 import fs from 'fs/promises';
 import open from 'open';
 import http from 'http';
-import net from 'net';
 import { WebSocketServer, WebSocket } from 'ws';
 import clipboardy from 'clipboardy';
 import { fileURLToPath } from 'url';
 import { promises as fsPromises } from 'fs';
 import multer from 'multer';
 import AdmZip from 'adm-zip';
-import { sendEvent, readEvents, buildWavHeader } from './wyoming.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -54,6 +52,7 @@ app.get('/vapi-web-bundle.min.js', (req, res) => {
 
 // Load or create settings.json
 const settingsPath = path.join(__dirname, 'settings.json');
+const exampleSettingsPath = path.join(__dirname, 'settings.example.json');
 let settings = { clipboardAccess: false };
 
 async function loadOrCreateSettings() {
@@ -63,6 +62,11 @@ async function loadOrCreateSettings() {
     settings = JSON.parse(data);
   } catch (error) {
     if (error.code === 'ENOENT') {
+      // settings.json is gitignored, so seed fresh installs from the committed example
+      try {
+        const exampleData = await fs.readFile(exampleSettingsPath, 'utf8');
+        settings = JSON.parse(exampleData);
+      } catch (_) {}
       await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2));
     } else {
       console.error('Error accessing settings file:', error);
@@ -117,7 +121,8 @@ app.post('/api/settings', express.json(), async (req, res) => {
       'characterName', 'assistantID', 'settingsIconToggle', 'assistantShortcut',
       'assistantProvider', 'customLLMBaseUrl', 'customLLMApiKey', 'customLLMModel',
       'customSystemPrompt', 'customFirstMessage',
-      'wyomingSttHost', 'wyomingSttPort', 'wyomingTtsHost', 'wyomingTtsPort', 'wyomingTtsVoice',
+      'sttBaseUrl', 'sttApiKey', 'sttModel',
+      'ttsBaseUrl', 'ttsApiKey', 'ttsModel', 'ttsVoice',
     ];
 
     possibleSettings.forEach(setting => {
@@ -192,9 +197,9 @@ const wssTTS = new WebSocketServer({ noServer: true });
 
 // Route WebSocket upgrade requests by path
 server.on('upgrade', (req, socket, head) => {
-  if (req.url === '/wyoming/stt') {
+  if (req.url === '/stt') {
     wssSTT.handleUpgrade(req, socket, head, (ws) => wssSTT.emit('connection', ws, req));
-  } else if (req.url === '/wyoming/tts') {
+  } else if (req.url === '/tts') {
     wssTTS.handleUpgrade(req, socket, head, (ws) => wssTTS.emit('connection', ws, req));
   } else {
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
@@ -209,7 +214,34 @@ wss.on('connection', (ws) => {
   });
 });
 
-// ─── Wyoming STT handler (/wyoming/stt) ────────────────────────────────────
+// ─── Speech helpers (OpenAI-compatible audio API) ──────────────────────────
+
+// Build a minimal 44-byte WAV header for raw PCM audio
+function buildWavHeader(dataLen, sampleRate = 16000, channels = 1, bitDepth = 16) {
+  const byteRate = sampleRate * channels * (bitDepth / 8);
+  const blockAlign = channels * (bitDepth / 8);
+  const buf = Buffer.alloc(44);
+
+  buf.write('RIFF', 0, 'ascii');
+  buf.writeUInt32LE(36 + dataLen, 4);
+  buf.write('WAVE', 8, 'ascii');
+  buf.write('fmt ', 12, 'ascii');
+  buf.writeUInt32LE(16, 16);           // fmt chunk size
+  buf.writeUInt16LE(1, 20);            // PCM format
+  buf.writeUInt16LE(channels, 22);
+  buf.writeUInt32LE(sampleRate, 24);
+  buf.writeUInt32LE(byteRate, 28);
+  buf.writeUInt16LE(blockAlign, 32);
+  buf.writeUInt16LE(bitDepth, 34);
+  buf.write('data', 36, 'ascii');
+  buf.writeUInt32LE(dataLen, 40);
+
+  return buf;
+}
+
+function speechAuthHeaders(apiKey) {
+  return apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {};
+}
 
 // Calculate RMS amplitude of a 16-bit LE PCM buffer
 function pcmRMS(buf) {
@@ -221,62 +253,43 @@ function pcmRMS(buf) {
   return Math.sqrt(sum / (buf.length / 2));
 }
 
-wssSTT.on('connection', (ws) => {
-  const sttHost = settings.wyomingSttHost || 'localhost';
-  const sttPort = parseInt(settings.wyomingSttPort) || 10300;
+// ─── STT handler (/stt → POST {sttBaseUrl}/audio/transcriptions) ────────────
 
+wssSTT.on('connection', (ws) => {
   // VAD config
   const SPEECH_THRESHOLD = 500;   // RMS level to count as speech (0–32767)
   const SILENCE_FRAMES   = 3;     // consecutive silent frames before triggering (~768ms at 256ms/frame)
   const MIN_SPEECH_FRAMES = 2;    // ignore very short bursts (< ~512ms)
+  const PRE_ROLL_FRAMES  = 2;     // silent frames kept before speech so the first syllable isn't clipped
 
-  let tcp = null;
-  let tcpReady = false;
   let speaking = false;
   let silenceCount = 0;
   let speechCount = 0;
   let waitingForTranscript = false;
+  let utterance = [];   // PCM buffers of the current utterance
+  let preRoll = [];     // rolling buffer of recent silent frames
 
-  function openTcpSession() {
-    if (tcp) tcp.destroy();
-    tcp = net.createConnection({ host: sttHost, port: sttPort });
-    tcpReady = false;
+  console.log(`[STT] Browser connected → ${settings.sttBaseUrl || 'http://localhost:8000/v1'}`);
 
-    tcp.on('connect', () => {
-      tcpReady = true;
-      console.log('[Wyoming STT] TCP session opened');
-      sendEvent(tcp, 'transcribe', { language: 'en' });
-      sendEvent(tcp, 'audio-start', { rate: 16000, width: 2, channels: 1 });
+  async function transcribe(pcm) {
+    const baseUrl = (settings.sttBaseUrl || 'http://localhost:8000/v1').replace(/\/+$/, '');
+    const wav = Buffer.concat([buildWavHeader(pcm.length, 16000, 1, 16), pcm]);
+
+    const form = new FormData();
+    form.append('file', new Blob([wav], { type: 'audio/wav' }), 'audio.wav');
+    form.append('model', settings.sttModel || 'whisper-1');
+
+    const res = await fetch(`${baseUrl}/audio/transcriptions`, {
+      method: 'POST',
+      headers: speechAuthHeaders(settings.sttApiKey),
+      body: form,
     });
-
-    tcp.on('error', (err) => {
-      console.error('[Wyoming STT] TCP error:', err.message);
-      tcpReady = false;
-    });
-
-    // Read transcript from this session, forward to browser, then open next session
-    (async () => {
-      for await (const event of readEvents(tcp)) {
-        if (event.type === 'transcript') {
-          const text = (event.data.text || '').trim();
-          console.log(`[Wyoming STT] transcript: "${text}"`);
-          if (text && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'fullSentence', text }));
-          }
-          break; // one transcript per session
-        } else {
-          console.log(`[Wyoming STT] event: ${event.type}`);
-        }
-      }
-      tcp.destroy();
-      waitingForTranscript = false;
-      console.log('[Wyoming STT] ready for next utterance');
-      if (ws.readyState === WebSocket.OPEN) openTcpSession();
-    })().catch((err) => console.error('[Wyoming STT] readEvents error:', err));
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    }
+    const json = await res.json();
+    return (json.text || '').trim();
   }
-
-  console.log(`[Wyoming STT] Browser connected → ${sttHost}:${sttPort}`);
-  openTcpSession(); // open first session immediately
 
   // Receive binary audio frames from browser
   // Frame format: [4 bytes LE: metaLen][metaLen bytes JSON][PCM bytes]
@@ -293,122 +306,119 @@ wssSTT.on('connection', (ws) => {
 
     frameCount++;
     if (frameCount === 1 || frameCount % 50 === 0) {
-      console.log(`[Wyoming STT] frame #${frameCount} rms:${Math.round(pcmRMS(pcm))} speaking:${speaking} silence:${silenceCount}`);
+      console.log(`[STT] frame #${frameCount} rms:${Math.round(pcmRMS(pcm))} speaking:${speaking} silence:${silenceCount}`);
     }
 
-    // While waiting for transcript from previous utterance, discard audio
-    if (waitingForTranscript) return;
+    // While the previous utterance is still transcribing, don't start a new one,
+    // but keep the pre-roll fed so speech resuming right after isn't clipped.
+    if (waitingForTranscript) {
+      preRoll.push(pcm);
+      if (preRoll.length > PRE_ROLL_FRAMES) preRoll.shift();
+      return;
+    }
 
     const rms = pcmRMS(pcm);
 
     if (rms >= SPEECH_THRESHOLD) {
-      // Active speech
+      // Active speech — start the utterance with the pre-roll so onset isn't clipped
+      if (!speaking) {
+        utterance = [...preRoll];
+        preRoll = [];
+      }
       speaking = true;
       silenceCount = 0;
       speechCount++;
-      if (tcpReady) sendEvent(tcp, 'audio-chunk', { rate: 16000, width: 2, channels: 1 }, pcm);
+      utterance.push(pcm);
     } else if (speaking) {
       // Silence after speech
       silenceCount++;
-      if (tcpReady) sendEvent(tcp, 'audio-chunk', { rate: 16000, width: 2, channels: 1 }, pcm);
+      utterance.push(pcm);
 
       if (silenceCount >= SILENCE_FRAMES) {
         if (speechCount >= MIN_SPEECH_FRAMES) {
-          // End of utterance — flush to faster-whisper
-          console.log(`[Wyoming STT] end of utterance (${speechCount} speech frames), sending audio-stop`);
+          // End of utterance — send buffered audio for transcription
+          console.log(`[STT] end of utterance (${speechCount} speech frames), transcribing`);
           waitingForTranscript = true;
-          if (tcpReady) sendEvent(tcp, 'audio-stop', {});
+          const audio = Buffer.concat(utterance);
+          transcribe(audio)
+            .then((text) => {
+              console.log(`[STT] transcript: "${text}"`);
+              if (text && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'fullSentence', text }));
+              }
+            })
+            .catch((err) => console.error('[STT] transcription error:', err.message))
+            .finally(() => { waitingForTranscript = false; });
         } else {
           // Too short — likely noise, reset quietly
-          console.log('[Wyoming STT] burst too short, ignoring');
-          openTcpSession();
+          console.log('[STT] burst too short, ignoring');
         }
         speaking = false;
         silenceCount = 0;
         speechCount = 0;
+        utterance = [];
       }
+    } else {
+      // Pure silence before any speech — keep a short pre-roll
+      preRoll.push(pcm);
+      if (preRoll.length > PRE_ROLL_FRAMES) preRoll.shift();
     }
-    // pure silence before any speech: don't send to faster-whisper
   });
 
   ws.on('close', () => {
-    console.log('[Wyoming STT] Browser disconnected');
-    if (tcp) {
-      // If waiting for transcript the IIFE already owns cleanup; otherwise we do it
-      if (!waitingForTranscript && tcpReady) sendEvent(tcp, 'audio-stop', {});
-      tcp.destroy();
-      tcp = null;
-    }
+    console.log('[STT] Browser disconnected');
+    utterance = [];
+    preRoll = [];
   });
 });
 
-// ─── Wyoming TTS handler (/wyoming/tts) ────────────────────────────────────
-wssTTS.on('connection', (ws) => {
-  console.log('[Wyoming TTS] Browser connected');
+// ─── TTS handler (/tts → POST {ttsBaseUrl}/audio/speech) ────────────────────
 
-  ws.on('message', async (data, isBinary) => {
+wssTTS.on('connection', (ws) => {
+  console.log('[TTS] Browser connected');
+
+  // Serialize requests per connection so sentences play back in order
+  let queue = Promise.resolve();
+
+  async function synthesize(text) {
+    const baseUrl = (settings.ttsBaseUrl || 'http://localhost:8000/v1').replace(/\/+$/, '');
+
+    const res = await fetch(`${baseUrl}/audio/speech`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...speechAuthHeaders(settings.ttsApiKey),
+      },
+      body: JSON.stringify({
+        model: settings.ttsModel || 'tts-1',
+        voice: settings.ttsVoice || 'alloy',
+        input: text,
+        response_format: 'wav',
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    }
+
+    const audio = Buffer.from(await res.arrayBuffer());
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ audioOutput: { audio: audio.toString('base64') } }));
+    }
+    console.log(`[TTS] Sent ${audio.length} bytes of audio`);
+  }
+
+  ws.on('message', (data, isBinary) => {
     if (isBinary) return;
     const text = data.toString('utf8').trim();
     if (!text) return;
 
-    const ttsHost = settings.wyomingTtsHost || 'localhost';
-    const ttsPort = parseInt(settings.wyomingTtsPort) || 10200;
-    console.log(`[Wyoming TTS] opening TCP to ${ttsHost}:${ttsPort}`);
-    const ttsVoice = settings.wyomingTtsVoice || 'en_US-lessac-medium';
-
-    const tcp = net.createConnection({ host: ttsHost, port: ttsPort });
-    const audioChunks = [];
-    let sampleRate = 22050;
-
-    tcp.on('connect', () => {
-      sendEvent(tcp, 'synthesize', {
-        text,
-        voice: { name: ttsVoice },
-      });
-    });
-
-    tcp.on('error', (err) => {
-      console.error('[Wyoming TTS] TCP error:', err.message);
-      tcp.destroy(); // triggers close → readEvents generator exits cleanly
-    });
-
-    try {
-      for await (const event of readEvents(tcp)) {
-        if (event.type === 'audio-start') {
-          sampleRate = event.data.rate || 22050;
-          console.log(`[Wyoming TTS] audio-start: ${sampleRate} Hz`);
-        } else if (event.type === 'audio-chunk' && event.payload) {
-          audioChunks.push(event.payload);
-        } else if (event.type === 'audio-stop') {
-          console.log('[Wyoming TTS] audio-stop');
-          break;
-        }
-      }
-    } catch (err) {
-      console.error('[Wyoming TTS] stream error:', err.message);
-    } finally {
-      tcp.destroy();
-    }
-
-    if (audioChunks.length === 0) {
-      console.warn('[Wyoming TTS] No audio received from Piper');
-      return;
-    }
-
-    const pcmData = Buffer.concat(audioChunks);
-    const wavHeader = buildWavHeader(pcmData.length, sampleRate, 1, 16);
-    const wavData = Buffer.concat([wavHeader, pcmData]);
-    const b64 = wavData.toString('base64');
-
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ audioOutput: { audio: b64 } }));
-    }
-
-    console.log(`[Wyoming TTS] Sent ${wavData.length} bytes of WAV audio`);
+    queue = queue
+      .then(() => synthesize(text))
+      .catch((err) => console.error('[TTS] synthesis error:', err.message));
   });
 
   ws.on('close', () => {
-    console.log('[Wyoming TTS] Browser disconnected');
+    console.log('[TTS] Browser disconnected');
   });
 });
 

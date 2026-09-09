@@ -8,6 +8,13 @@ import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { LookingGlassWebXRPolyfill, LookingGlassConfig } from "@lookingglass/webxr"
 import { VRButton } from "three/addons/webxr/VRButton.js";
 
+// Build a same-origin WebSocket URL, matching the page's scheme so the app
+// keeps working when served over HTTPS.
+function wsUrl(path = '') {
+  const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  return scheme + location.host + path;
+}
+
 // Set up renderer to use full screen
 const renderer = new THREE.WebGLRenderer();
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -889,7 +896,7 @@ window.addEventListener('load', async () => {
     }
   });
 
-  const socket = new WebSocket('ws://' + location.host);
+  const socket = new WebSocket(wsUrl());
   const clipboardAlert = document.getElementById('clipboardAlert');
 
   socket.onmessage = function(event) {
@@ -986,12 +993,12 @@ async function startCustom() {
   const processor = customProvider.audioCtx.createScriptProcessor(4096, 1, 1);
   customProvider.scriptProcessor = processor;
 
-  // Connect STT WebSocket (routes through server.mjs → Wyoming TCP)
-  const sttDataWs = new WebSocket('ws://localhost:3000/wyoming/stt');
+  // Connect STT WebSocket (routes through server.mjs → OpenAI-compatible /audio/transcriptions)
+  const sttDataWs = new WebSocket(wsUrl('/stt'));
   customProvider.sttDataWs = sttDataWs;
 
-  // Connect TTS WebSocket (routes through server.mjs → Wyoming TCP)
-  const ttsWs = new WebSocket('ws://localhost:3000/wyoming/tts');
+  // Connect TTS WebSocket (routes through server.mjs → OpenAI-compatible /audio/speech)
+  const ttsWs = new WebSocket(wsUrl('/tts'));
   customProvider.ttsWs = ttsWs;
   customProvider.ttsAudioQueue = [];
   customProvider.ttsPlaying = false;
@@ -1108,6 +1115,7 @@ async function callLLM() {
   if (s.customLLMApiKey) headers['Authorization'] = 'Bearer ' + s.customLLMApiKey;
 
   let fullResponse = '';
+  let pendingTTS = '';
   updateVrmNameDisplay('Character');
 
   try {
@@ -1142,14 +1150,30 @@ async function callLLM() {
           const delta = json.choices?.[0]?.delta?.content;
           if (delta) {
             fullResponse += delta;
+            pendingTTS += delta;
             updateTextMesh(fullResponse);
+
+            // Flush complete sentences to TTS without waiting for full response
+            const sentenceRegex = /[^.!?\n]*[.!?\n][)"'\s]*/g;
+            let lastIndex = 0;
+            let match;
+            while ((match = sentenceRegex.exec(pendingTTS)) !== null) {
+              lastIndex = sentenceRegex.lastIndex;
+            }
+            if (lastIndex > 0) {
+              const sentences = pendingTTS.slice(0, lastIndex).trim();
+              pendingTTS = pendingTTS.slice(lastIndex);
+              if (sentences) speakText(sentences);
+            }
           }
         } catch (_) {}
       }
     }
 
+    // Flush any remaining text that didn't end with punctuation
+    if (pendingTTS.trim()) speakText(pendingTTS.trim());
+
     customProvider.chatHistory.push({ role: 'assistant', content: fullResponse });
-    speakText(fullResponse);
   } catch (err) {
     console.error('LLM call failed:', err);
     updateTextMesh('LLM connection error: ' + err.message);
@@ -1164,17 +1188,38 @@ function speakText(text) {
   }
 }
 
+// Stop playback cleanly. Every exit path out of playNextTTSChunk must go through
+// here: leaving ttsPlaying true blocks all further playback for the session and
+// leaves the render loop driving the mouth from an analyser that never updates.
+function stopTTSPlayback() {
+  customProvider.ttsPlaying = false;
+  if (currentVrm) currentVrm.expressionManager.setValue('aa', 0);
+}
+
 function playNextTTSChunk() {
-  if (customProvider.ttsAudioQueue.length === 0) {
-    customProvider.ttsPlaying = false;
-    if (currentVrm) currentVrm.expressionManager.setValue('aa', 0);
+  const ctx = customProvider.ttsAudioCtx;
+
+  // Session torn down — drop anything still queued, it can never be decoded now.
+  if (!ctx || ctx.state === 'closed') {
+    customProvider.ttsAudioQueue = [];
+    stopTTSPlayback();
     return;
   }
+
+  if (customProvider.ttsAudioQueue.length === 0) {
+    stopTTSPlayback();
+    return;
+  }
+
   customProvider.ttsPlaying = true;
   const buffer = customProvider.ttsAudioQueue.shift();
-  customProvider.ttsAudioCtx.decodeAudioData(buffer, (audioBuffer) => {
-    // Guard: context may have been closed if the session was stopped mid-playback
-    if (!customProvider.ttsAudioCtx || customProvider.ttsAudioCtx.state === 'closed') return;
+  ctx.decodeAudioData(buffer, (audioBuffer) => {
+    // The context can also close while this decode is in flight.
+    if (!customProvider.ttsAudioCtx || customProvider.ttsAudioCtx.state === 'closed') {
+      customProvider.ttsAudioQueue = [];
+      stopTTSPlayback();
+      return;
+    }
     const source = customProvider.ttsAudioCtx.createBufferSource();
     source.buffer = audioBuffer;
     source.connect(customProvider.analyser);

@@ -261,46 +261,68 @@
         </span>
         <br><br>
 
-        <p style="font-size: 1.1em; margin-bottom: 0.5em; opacity: 0.8;">Wyoming STT (faster-whisper)</p>
+        <p style="font-size: 1.1em; margin-bottom: 0.5em; opacity: 0.8;">Speech to Text (OpenAI-compatible, e.g. Speaches)</p>
         <div class="input-container">
-            <label for="wyomingSttHost" style="font-size: 1.2em;">STT Host</label>
+            <label for="sttBaseUrl" style="font-size: 1.2em;">STT Base URL</label>
             <div class="input-wrapper">
-                <input type="text" id="wyomingSttHost" placeholder="localhost" class="rounded-input">
+                <input type="text" id="sttBaseUrl" placeholder="http://localhost:8000/v1" class="rounded-input">
             </div>
-            <button class="save-button" data-save="wyomingSttHost">Save</button>
+            <button class="save-button" data-save="sttBaseUrl">Save</button>
         </div>
 
         <div class="input-container">
-            <label for="wyomingSttPort" style="font-size: 1.2em;">STT Port</label>
+            <label for="sttModel" style="font-size: 1.2em;">STT Model</label>
             <div class="input-wrapper">
-                <input type="number" id="wyomingSttPort" placeholder="10300" class="rounded-input">
+                <input type="text" id="sttModel" placeholder="Systran/faster-whisper-small" class="rounded-input">
             </div>
-            <button class="save-button" data-save="wyomingSttPort">Save</button>
-        </div>
-
-        <p style="font-size: 1.1em; margin-bottom: 0.5em; opacity: 0.8; margin-top: 1em;">Wyoming TTS (Piper)</p>
-        <div class="input-container">
-            <label for="wyomingTtsHost" style="font-size: 1.2em;">TTS Host</label>
-            <div class="input-wrapper">
-                <input type="text" id="wyomingTtsHost" placeholder="localhost" class="rounded-input">
-            </div>
-            <button class="save-button" data-save="wyomingTtsHost">Save</button>
+            <button class="save-button" data-save="sttModel">Save</button>
         </div>
 
         <div class="input-container">
-            <label for="wyomingTtsPort" style="font-size: 1.2em;">TTS Port</label>
+            <label for="sttApiKey" style="font-size: 1.2em;">STT API Key <span style="font-weight: normal; font-size: 0.85em;">(optional)</span></label>
             <div class="input-wrapper">
-                <input type="number" id="wyomingTtsPort" placeholder="10200" class="rounded-input">
+                <input type="password" id="sttApiKey" placeholder="sk-..." class="rounded-input">
+                <button class="toggle-visibility" data-target="sttApiKey">
+                    <img src="icons/eye-off.svg" alt="Toggle Visibility" class="input-icon">
+                </button>
             </div>
-            <button class="save-button" data-save="wyomingTtsPort">Save</button>
+            <button class="save-button" data-save="sttApiKey">Save</button>
+        </div>
+
+        <p style="font-size: 1.1em; margin-bottom: 0.5em; opacity: 0.8; margin-top: 1em;">Text to Speech (OpenAI-compatible, e.g. Speaches / Kokoro)</p>
+        <div class="input-container">
+            <label for="ttsBaseUrl" style="font-size: 1.2em;">TTS Base URL</label>
+            <div class="input-wrapper">
+                <input type="text" id="ttsBaseUrl" placeholder="http://localhost:8000/v1" class="rounded-input">
+            </div>
+            <button class="save-button" data-save="ttsBaseUrl">Save</button>
         </div>
 
         <div class="input-container">
-            <label for="wyomingTtsVoice" style="font-size: 1.2em;">TTS Voice</label>
+            <label for="ttsModel" style="font-size: 1.2em;">TTS Model</label>
             <div class="input-wrapper">
-                <input type="text" id="wyomingTtsVoice" placeholder="en_US-lessac-medium" class="rounded-input">
+                <input type="text" id="ttsModel" placeholder="speaches-ai/Kokoro-82M-v1.0-ONNX" class="rounded-input">
             </div>
-            <button class="save-button" data-save="wyomingTtsVoice">Save</button>
+            <button class="save-button" data-save="ttsModel">Save</button>
+        </div>
+
+        <div class="input-container">
+            <label for="ttsVoice" style="font-size: 1.2em;">TTS Voice</label>
+            <div class="input-wrapper">
+                <input type="text" id="ttsVoice" placeholder="af_heart" class="rounded-input">
+            </div>
+            <button class="save-button" data-save="ttsVoice">Save</button>
+        </div>
+
+        <div class="input-container">
+            <label for="ttsApiKey" style="font-size: 1.2em;">TTS API Key <span style="font-weight: normal; font-size: 0.85em;">(optional)</span></label>
+            <div class="input-wrapper">
+                <input type="password" id="ttsApiKey" placeholder="sk-..." class="rounded-input">
+                <button class="toggle-visibility" data-target="ttsApiKey">
+                    <img src="icons/eye-off.svg" alt="Toggle Visibility" class="input-icon">
+                </button>
+            </div>
+            <button class="save-button" data-save="ttsApiKey">Save</button>
         </div>
     </div>
     

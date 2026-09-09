@@ -1,3 +1,20 @@
 node_modules/
 .idea/
+
+# Local runtime settings (commit settings.example.json instead)
 settings.json
+
+# Custom character uploads stay local — bundled samples remain tracked
+characters/*
+!characters/AvatarSample_A.png
+!characters/AvatarSample_A.vrm
+!characters/AvatarSample_B.png
+!characters/AvatarSample_B.vrm
+!characters/AvatarSample_C.png
+!characters/AvatarSample_C.vrm
+
+# Runtime upload scratch space (recreated by server on start)
+uploads/
+
+# Runtime logs
+*.log

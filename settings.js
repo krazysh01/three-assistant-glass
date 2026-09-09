@@ -157,12 +157,14 @@ async function loadSettings() {
     document.getElementById('customSystemPrompt').value = settings.customSystemPrompt || '';
     document.getElementById('customFirstMessage').value = settings.customFirstMessage || '';
 
-    // Load Wyoming endpoint settings
-    document.getElementById('wyomingSttHost').value = settings.wyomingSttHost || '';
-    document.getElementById('wyomingSttPort').value = settings.wyomingSttPort || '';
-    document.getElementById('wyomingTtsHost').value = settings.wyomingTtsHost || '';
-    document.getElementById('wyomingTtsPort').value = settings.wyomingTtsPort || '';
-    document.getElementById('wyomingTtsVoice').value = settings.wyomingTtsVoice || '';
+    // Load OpenAI-compatible speech endpoint settings
+    document.getElementById('sttBaseUrl').value = settings.sttBaseUrl || '';
+    document.getElementById('sttModel').value = settings.sttModel || '';
+    document.getElementById('sttApiKey').value = settings.sttApiKey || '';
+    document.getElementById('ttsBaseUrl').value = settings.ttsBaseUrl || '';
+    document.getElementById('ttsModel').value = settings.ttsModel || '';
+    document.getElementById('ttsVoice').value = settings.ttsVoice || '';
+    document.getElementById('ttsApiKey').value = settings.ttsApiKey || '';
 }
 
 // Function to save settings
