@@ -301,7 +301,14 @@ async function refreshAllSuggestions() {
     await Promise.all([refreshSpeechSuggestions(), refreshLlmSuggestions()]);
 }
 
-document.getElementById('ttsModel')?.addEventListener('change', refreshVoiceSuggestions);
+document.getElementById('ttsModel')?.addEventListener('change', () => {
+    // A voice belongs to a model: Kokoro's af_heart means nothing to a Piper
+    // model. Clear it so the refreshed suggestions drive the next choice rather
+    // than leaving a value that will fail at synthesis time.
+    const voice = document.getElementById('ttsVoice');
+    if (voice) voice.value = '';
+    refreshVoiceSuggestions();
+});
 
 // Show how many settings this browser has overridden, and offer a way back to
 // the deployment's defaults.
