@@ -3,6 +3,14 @@ import { loadSettings, saveSetting, saveSettings, clearAllOverrides, getDefaults
 import { fetchModels, sttModels, ttsModels, voicesFor, describeVoice, describeLanguages, fillDatalist }
   from './model-catalog.mjs';
 import { KOKORO_VOICES } from './assistant/kokoro.js';
+import { enhanceSelect, enhanceCombobox } from './combobox.js';
+
+// Every dropdown-shaped control on this page draws its own menu. This runs
+// before anything populates the form: enhanceSelect leaves the <select> in
+// place as the source of truth, so the field table, dirty tracking and
+// validation below still read the same elements by the same ids.
+document.querySelectorAll('select').forEach(enhanceSelect);
+document.querySelectorAll('input[list]').forEach(enhanceCombobox);
 
 document.querySelectorAll('.settings-tab-button').forEach(button => {
     button.addEventListener('click', () => {
@@ -417,32 +425,11 @@ function noteSuggestions(id, count, what) {
     input.title = count
         ? `${count} ${noun} suggested - you can still type any value`
         : `No ${what} advertised by this endpoint - type the value manually`;
-    // Only advertise a list when there is one to open. Without this the field
-    // looks identical to a plain text input, which is how the suggestions went
-    // unnoticed: a datalist has no affordance of its own next to a styled
-    // select, and an empty one would open on nothing.
+    // Only advertise a list when there is one to open: this is what shows the
+    // combobox chevron. Without it the field looks identical to a plain text
+    // input, which is how the suggestions went unnoticed - and a chevron on a
+    // field with nothing to offer would open on nothing.
     input.classList.toggle('has-suggestions', count > 0);
-}
-
-// A <datalist> keeps the field free text, which is the point - any model or
-// voice the server didn't list must still be typeable. The cost is that
-// browsers give it no visible control, so the chevron drawn by
-// .has-suggestions is wired up here: clicking it opens the list, exactly like
-// the select it is drawn to match, while clicking the text still just places
-// the caret. Arrow-down already opens the list natively.
-const CHEVRON_ZONE = 38; // px from the right edge, matching the CSS padding
-for (const id of ['customLLMModel', 'sttModel', 'ttsModel', 'ttsVoice']) {
-    const input = document.getElementById(id);
-    if (!input) continue;
-    input.addEventListener('mousedown', (event) => {
-        if (!input.classList.contains('has-suggestions')) return;
-        if (input.getBoundingClientRect().right - event.clientX > CHEVRON_ZONE) return;
-        event.preventDefault(); // keep focus off the caret so the list gets it
-        input.focus();
-        // showPicker needs user activation and isn't in every browser; falling
-        // through to a focused field with arrow-down still works.
-        try { input.showPicker(); } catch (e) { /* not supported here */ }
-    });
 }
 
 async function refreshSpeechSuggestions() {
