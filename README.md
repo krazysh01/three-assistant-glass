@@ -23,6 +23,47 @@ Customizable 3D conversational AI character
 - Local AI via custom endpoints
 - OpenAI-compatible speech endpoints for STT (`/v1/audio/transcriptions`) and TTS (`/v1/audio/speech`) — works with [Speaches](https://speaches.ai), Kokoro-FastAPI, LocalAI, or OpenAI itself
 - Custom OpenAI-compatible endpoint for LLM
+- Replies are streamed and spoken sentence by sentence, so the character starts
+  talking while the model is still writing
+- On-device voice activity detection ([Silero](https://github.com/ricky0123/vad)),
+  with barge-in: start talking and the character stops to listen
+- Speech can also run entirely in the browser — Chrome's Web Speech for
+  listening, [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX)
+  or the OS voices for speaking — so a laptop with a local model needs no speech
+  server at all
+
+Everything in this pipeline runs in the browser. The app server only serves the
+page, the character files and the clipboard bridge; it never sees the
+conversation, the audio or the keys.
+
+#### Speech and language providers
+
+Set these in **Settings → Assistant**. Speech-to-text and text-to-speech are
+chosen separately, so you can mix them.
+
+| | Speech to text | Text to speech |
+|---|---|---|
+| **OpenAI-compatible** | `POST /v1/audio/transcriptions` | `POST /v1/audio/speech` |
+| **Browser** | Chrome Web Speech (audio goes to Google) | OS voices via `speechSynthesis` |
+| **Kokoro** | — | in-browser Kokoro-82M, free and offline after a one-time 90–330 MB download |
+
+The quick-setup buttons fill in a working combination for OpenAI, Ollama, LM
+Studio, Speaches, or fully in-browser speech; every field stays editable
+afterwards.
+
+#### Automatic expressions
+
+Optional, off by default, under **Settings → Assistant → Expressions**. Each
+sentence the character speaks is classified with the
+[GoEmotions](https://huggingface.co/SamLowe/roberta-base-go_emotions-onnx) model
+and blended into the VRM's `happy` / `sad` / `angry` / `relaxed` / `surprised`
+expressions, leaving blinking and mouth movement alone.
+
+Classification runs in the browser through
+[transformers.js](https://github.com/huggingface/transformers.js), on WebGPU
+where the browser has it and WASM otherwise — roughly 350 ms per sentence on
+WebGPU. The first use downloads about 125 MB, which the browser then caches; the
+voice keeps working while it loads, and English replies are all it understands.
 
 Settings are layered. `settings.json` on the server holds the deployment's
 defaults, shared by every client; anything a user changes is saved in their own
@@ -57,7 +98,8 @@ never a constraint — any value can still be typed, since a bundled list goes
 stale as soon as a provider adds a voice.
 
 The browser calls the LLM, STT and TTS endpoints directly, so each service must
-allow the app's origin via CORS. On [Speaches](https://speaches.ai) that is the
+allow the app's origin via CORS. (The in-browser speech providers need no
+endpoint, so they need no CORS either.) On [Speaches](https://speaches.ai) that is the
 `ALLOW_ORIGINS` variable, which takes a JSON array — `["http://localhost:3000"]`,
 or `["*"]` to allow any origin. A service that isn't configured for CORS will
 have its requests blocked by the browser.
@@ -75,10 +117,11 @@ have its requests blocked by the browser.
 ### Experimental
 
 - Plaintext clipboard access
+- Automatic facial expressions from the character's replies
 
 ### Possible future features
 
-- Show current time
+- Realtime speech-to-speech providers as a third option alongside Vapi and Custom
 - Add setting to change size/scale of character
 - Add setting to move character backwards or forwards
 
@@ -111,11 +154,30 @@ have its requests blocked by the browser.
    ```
 5. http://localhost:3000/ should open automatically
 
-6. Open Settings and save your [Vapi keys](https://dashboard.vapi.ai/org/api-keys)
+6. Open Settings, pick a character on the **Characters** tab, then open the
+   **Assistant** tab and choose a provider
 
-7. Pick a character model and voice assistant ([Create an assistant on Vapi](https://dashboard.vapi.ai/assistants) first if you haven't already)
+7. For Vapi: paste your [keys](https://dashboard.vapi.ai/org/api-keys) into the
+   same tab and pick an assistant ([create one](https://dashboard.vapi.ai/assistants)
+   first if you haven't already). For Custom: use a quick-setup preset or fill in
+   the endpoints yourself
 
-8. Go back to http://localhost:3000/settings and click ▶️ to start the assistant
+8. Go back to http://localhost:3000/ and press **Start** to begin the assistant
+
+To run on a different port, set `THREE_ASSISTANT_PORT`:
+
+```
+THREE_ASSISTANT_PORT=3010 npm start
+```
+
+### Tests
+
+```
+npm test
+```
+
+Covers the assistant pipeline, the speech queue, expressions and the settings
+plumbing. No network and no dependencies beyond the ones already installed.
 
 ## View on a Looking Glass Display
 

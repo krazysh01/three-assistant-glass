@@ -15,7 +15,7 @@ const __dirname = path.dirname(__filename);
 
 // Initialize Express app
 const app = express();
-const port = 3000;
+const port = Number(process.env.THREE_ASSISTANT_PORT) || 3000;
 
 // Ensure uploads directory exists
 const uploadsDir = path.join(__dirname, 'uploads');

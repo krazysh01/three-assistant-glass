@@ -127,16 +127,18 @@ export function createUtteranceDetector(options = {}) {
 // ─── Service calls ───────────────────────────────────────────────────────────
 
 // POST 16 kHz mono PCM to {sttBaseUrl}/audio/transcriptions; resolves to text.
-export async function transcribe(pcm, settings) {
+export async function transcribe(pcm, settings, { signal } = {}) {
   const wav = encodeWav(pcm, 16000, 1, 16);
   const form = new FormData();
   form.append('file', new Blob([wav], { type: 'audio/wav' }), 'audio.wav');
   form.append('model', settings.sttModel || 'whisper-1');
+  if (settings.assistantLanguage) form.append('language', settings.assistantLanguage);
 
   const res = await fetch(`${baseUrlOf(settings.sttBaseUrl)}/audio/transcriptions`, {
     method: 'POST',
     headers: authHeaders(settings.sttApiKey),
     body: form,
+    signal,
   });
   if (!res.ok) throw new Error(`STT HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
 
@@ -145,7 +147,8 @@ export async function transcribe(pcm, settings) {
 }
 
 // POST text to {ttsBaseUrl}/audio/speech; resolves to WAV bytes as an ArrayBuffer.
-export async function synthesize(text, settings) {
+export async function synthesize(text, settings, { signal } = {}) {
+  const speed = Number(settings.ttsSpeed);
   const res = await fetch(`${baseUrlOf(settings.ttsBaseUrl)}/audio/speech`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(settings.ttsApiKey) },
@@ -154,7 +157,10 @@ export async function synthesize(text, settings) {
       voice: settings.ttsVoice || 'alloy',
       input: text,
       response_format: 'wav',
+      // OpenAI's documented range; servers that ignore it are unaffected.
+      speed: Number.isFinite(speed) && speed > 0 ? Math.min(4, Math.max(0.25, speed)) : 1,
     }),
+    signal,
   });
   if (!res.ok) throw new Error(`TTS HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
 
