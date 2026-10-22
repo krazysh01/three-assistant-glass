@@ -159,6 +159,33 @@ test('a classifier failure reports itself instead of throwing', async () => {
   assert.equal(h.requests.length, 1, 'no further requests to a failed model');
 });
 
+test('a pipeline whose inference failed is replaced on the next call; a cancelled one is kept', async () => {
+  let imports = 0, disposed = 0, failNext = true;
+  const pipeline = async () => {
+    imports++;
+    const run = async (text) => {
+      if (failNext) { failNext = false; throw new Error('device lost'); }
+      return [{ label: 'joy', score: 0.9, text }];
+    };
+    run.dispose = async () => { disposed++; };
+    return run;
+  };
+  const { createEmotionClassifier } = await load('assistant/emotions.js',
+    { navigator: {} }, { [TRANSFORMERS_URL]: { pipeline } });
+  const classify = createEmotionClassifier();
+  await assert.rejects(classify('first'), /device lost/);
+  assert.equal(disposed, 1, 'the broken pipeline is released');
+  const [result] = await classify('second');
+  assert.equal(imports, 2, 'a fresh pipeline was loaded');
+  assert.equal(result.text, 'second');
+  const controller = new AbortController();
+  const cancelled = classify('third', controller.signal);
+  controller.abort();
+  await assert.rejects(cancelled);
+  await classify('fourth');
+  assert.equal(imports, 2, 'cancelling does not throw the model away');
+});
+
 test('the browser classifier loads once, warms up without classifying, and serializes calls', async () => {
   const progress = [];
   let imports = 0, running = 0, peak = 0;
@@ -202,16 +229,17 @@ test('a reaction to the user and the reply can show together as one blended face
 // An engine whose classifier fails on demand, with every timer's delay recorded.
 async function failingHarness() {
   const timers = new Map(), delays = []; let id = 0;
-  const { createEmotionEngine } = await load('assistant/emotion-engine.js', {
+  const { createEmotionEngine, RECOVERY_PROBE } = await load('assistant/emotion-engine.js', {
     setTimeout: (fn, ms) => { timers.set(++id, fn); delays.push(ms); return id; },
     clearTimeout: key => timers.delete(key),
   });
+  // warmCalls counts the initial load and every retry; a retry runs real inference.
   const state = { warmFailures: 0, warmCalls: 0, failNext: 0, requests: [], statuses: [] };
   const classify = async (text) => {
-    if (!text) {
+    if (!text || text === RECOVERY_PROBE) {
       state.warmCalls++;
-      if (state.warmFailures > 0) { state.warmFailures--; throw new Error('model lost'); }
-      return null;
+      if (text && state.warmFailures > 0) { state.warmFailures--; throw new Error('model lost'); }
+      return text ? [{ label: 'neutral', score: 0.9 }] : null;
     }
     state.requests.push(text);
     if (state.failNext > 0) { state.failNext--; throw new Error('device lost'); }
@@ -254,4 +282,28 @@ test('a model that never comes back is given up on after five tries, and turning
   assert.equal(off.timers.size, 1, 'a retry is scheduled');
   await off.engine.setEnabled(false);
   assert.equal(off.timers.size, 0, 'and cancelled when expressions are turned off');
+});
+
+test('a lost device is recovered from end to end: the broken model is replaced, not re-used', async () => {
+  const timers = new Map(); let id = 0, instances = 0;
+  const pipeline = async () => {
+    const broken = ++instances === 1; // the first model's device is gone for good
+    return async () => { if (broken) throw new Error('device lost'); return [{ label: 'joy', score: 0.9 }]; };
+  };
+  const { createEmotionEngine } = await load('assistant/emotion-engine.js', {
+    navigator: {}, setTimeout: fn => { timers.set(++id, fn); return id; }, clearTimeout: key => timers.delete(key),
+  }, { [TRANSFORMERS_URL]: { pipeline } });
+  const statuses = [];
+  const engine = createEmotionEngine({ getExpressions: () => ['neutral', 'happy'], onStatus: t => statuses.push(t) });
+  const settle = async () => { for (let i = 0; i < 6; i++) await tick(); };
+  const flush = async () => { const work = [...timers.values()]; timers.clear(); work.forEach(fn => fn()); await settle(); };
+  await engine.setEnabled(true);
+  engine.heard('That is great news!'); await settle();
+  assert.equal(statuses.at(-1), 'Automatic expressions unavailable');
+  await flush();
+  assert.equal(instances, 2, 'the retry loaded a fresh model');
+  assert.equal(statuses.at(-1), 'Automatic expressions ready');
+  engine.heard('I am so happy for you!'); await settle();
+  assert.match(statuses.at(-1), /^Expression: happy/);
+  assert.equal(statuses.filter(s => s === 'Automatic expressions unavailable').length, 1, 'no flipping between ready and unavailable');
 });

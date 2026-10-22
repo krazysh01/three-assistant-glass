@@ -56,6 +56,11 @@ const FACE_EPSILON = 0.05;
 const RECOVERY_ATTEMPTS = 5;
 const RECOVERY_BASE_MS = 500;
 const RECOVERY_MAX_MS = 8000;
+// Each retry classifies this, so it proves inference works rather than only
+// that a model is loaded: a pipeline that loads but cannot run must count as a
+// failed attempt, or the engine would flip between ready and unavailable on
+// every utterance. Its reading is discarded.
+export const RECOVERY_PROBE = 'Hello.';
 
 const NEUTRAL_FACE = () => ({ expression: 'neutral', intensity: 0, weights: {} });
 
@@ -150,7 +155,7 @@ export function createEmotionEngine(hooks = {}, classify, options = {}) {
       recovery = null;
       if (!enabled || generation !== version) return;
       try {
-        await classify('', controller.signal);
+        await classify(RECOVERY_PROBE, controller.signal);
         warmedUp(version);
       } catch {
         if (enabled && generation === version) recover(version, attempt + 1);
