@@ -18,6 +18,7 @@
   "customLLMBaseUrl": "http://localhost/v1",
   "customLLMApiKey": "",
   "customLLMModel": "",
+  "llmThinking": true,
   "customSystemPrompt": "",
   "customFirstMessage": "Hey There! how can I help you?",
   "sttBaseUrl": "",

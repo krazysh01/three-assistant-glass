@@ -16,6 +16,11 @@ export async function streamChat(messages, settings, { signal, onDelta } = {}) {
       model: settings.customLLMModel || '',
       messages,
       stream: true,
+      // Reasoning models (Qwen3 and the like) otherwise think before every
+      // reply, which in a voice conversation is a long silence. This is a
+      // chat-template option rather than an OpenAI parameter: vLLM, SGLang and
+      // llama.cpp honour it, OpenAI rejects it, so it is only sent on request.
+      ...(settings.llmThinking === false && { chat_template_kwargs: { enable_thinking: false } }),
     }),
     signal,
   });

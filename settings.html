@@ -262,6 +262,10 @@
                         <datalist id="customLLMModelList"></datalist>
                     </div>
                 </div>
+                <label class="row switch">
+                    <span class="row-label">Let the model think <span class="field-note">Off skips a reasoning model's thinking for faster replies (vLLM, SGLang, llama.cpp; not OpenAI)</span></span>
+                    <span class="row-control"><input type="checkbox" id="llmThinking"><span class="slider"></span></span>
+                </label>
                 <div class="row">
                     <label class="row-label" for="customSystemPrompt">System prompt</label>
                     <div class="row-control">

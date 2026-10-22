@@ -104,6 +104,12 @@ endpoint, so they need no CORS either.) On [Speaches](https://speaches.ai) that 
 or `["*"]` to allow any origin. A service that isn't configured for CORS will
 have its requests blocked by the browser.
 
+Reasoning models such as Qwen3 think before every reply, which in a voice
+conversation is a long silence. Turn off **Let the model think** under
+**Language model** to send `chat_template_kwargs: {"enable_thinking": false}`
+with each request. vLLM, SGLang and llama.cpp accept it; OpenAI's API rejects
+it, so leave the switch on there.
+
 ### Character - [three-vrm](https://github.com/pixiv/three-vrm)
 
 - Custom 3D model ([vrm](https://hub.vroid.com/en))

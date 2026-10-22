@@ -191,6 +191,8 @@ async function populateSettingsForm() {
     document.getElementById('customLLMBaseUrl').value = settings.customLLMBaseUrl || '';
     document.getElementById('customLLMApiKey').value = settings.customLLMApiKey || '';
     document.getElementById('customLLMModel').value = settings.customLLMModel || '';
+    // Thinking is left to the model unless it was explicitly turned off.
+    document.getElementById('llmThinking').checked = settings.llmThinking !== false;
     document.getElementById('customSystemPrompt').value = settings.customSystemPrompt || '';
     document.getElementById('customFirstMessage').value = settings.customFirstMessage || '';
 
@@ -359,6 +361,7 @@ const FIELDS = [
     { key: 'customLLMBaseUrl',   id: 'customLLMBaseUrl',     type: 'value', validate: validateBaseUrl },
     { key: 'customLLMApiKey',    id: 'customLLMApiKey',      type: 'value' },
     { key: 'customLLMModel',     id: 'customLLMModel',       type: 'value' },
+    { key: 'llmThinking',        id: 'llmThinking',          type: 'checkbox' },
     { key: 'customSystemPrompt', id: 'customSystemPrompt',   type: 'value' },
     { key: 'customFirstMessage', id: 'customFirstMessage',   type: 'value' },
     { key: 'sttBaseUrl',         id: 'sttBaseUrl',           type: 'value', validate: validateBaseUrl },
