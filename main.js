@@ -7,6 +7,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 import { loadMixamoAnimation } from './loadMixamoAnimation.js';
+import { createMouth } from './lip-sync.js';
 import { loadSettings, onSettingsChanged } from './settings-store.mjs';
 import { SVGLoader } from 'three/addons/loaders/SVGLoader.js';
 import { LookingGlassWebXRPolyfill, LookingGlassConfig } from "@lookingglass/webxr"
@@ -210,6 +211,9 @@ async function fetchSettings() {
 // and replaces what used to be a poll of /api/settings twice a second.
 function watchSettingsChanges() {
   onSettingsChanged((newSettings) => {
+    // The lip sync sliders are tuned while the character talks, so they apply
+    // without the reload that any other change triggers.
+    for (const key of ['mouthGain', 'mouthCurve']) currentSettings[key] = newSettings[key];
     // Expressions load a model on demand, so this one toggle is applied live
     // rather than costing a page reload mid-conversation.
     if (newSettings.autoExpressions !== currentSettings.autoExpressions) {
@@ -688,6 +692,9 @@ updateVrmNameDisplay();
 // animate
 const clock = new THREE.Clock();
 
+// The mouth follows the voice through lip-sync.js, reading the live settings.
+const mouth = createMouth(() => currentSettings);
+
 function updateBlink(deltaTime) {
     if (!currentVrm) return;
 
@@ -734,7 +741,7 @@ function animate() {
   if (currentVrm) {
     updateBlink(deltaTime);
     if (customAssistant) {
-      currentVrm.expressionManager.setValue('aa', customAssistant.mouthLevel());
+      currentVrm.expressionManager.setValue('aa', mouth.drive(customAssistant.mouthLevel(), deltaTime));
     }
     characterExpressions.update(deltaTime);
     currentVrm.update(deltaTime);
@@ -901,8 +908,8 @@ async function initializeVapi() {
   vapi.on('volume-level', (volume) => {
     console.log('Volume level:', volume);
     if (currentVrm) {
-      // Map the volume (0-1) to the 'aa' expression (0-1)
-      currentVrm.expressionManager.setValue('aa', volume);
+      // Vapi reports about ten times a second, so each report is ~0.1 s of release.
+      currentVrm.expressionManager.setValue('aa', mouth.drive(volume, 0.1));
     }
   });
 
@@ -1058,6 +1065,7 @@ function stopCustomAssistant() {
   endConversation();
   setAssistantStatus('');
   if (currentVrm) {
+    mouth.close();
     currentVrm.expressionManager.setValue('aa', 0);
   }
   updateTextMesh('Session ended.');

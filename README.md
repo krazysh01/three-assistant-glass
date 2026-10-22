@@ -260,6 +260,13 @@ clip's name to a pool to have the character use it on its own.
 1. Go back to http://localhost:3000/settings
 2. Turn on `Show Settings Icon`
 
+### The mouth barely moves, or opens too wide
+
+Avatars' mouth shapes differ, so tune them under **Settings → Features → Lip
+sync**. **Opening** sets how wide normal speech opens the mouth, and
+**Sensitivity** how far quiet sounds open it (1 is linear). Saved changes apply
+without reloading the character, so keep it talking while you adjust.
+
 ## Troubleshooting
 
 - For 2d displays [Arc](https://arc.net/gift/friend-of-maclean) browser is recommended
