@@ -30,6 +30,15 @@ async function harness(chunks, settings = {}) {
   return { requests, deltas, full };
 }
 
+test("a reasoning model's thinking is switched off only when asked, so other servers never see the option", async () => {
+  const asked = await harness([], { llmThinking: false });
+  assert.deepEqual({ ...asked.requests[0].body.chat_template_kwargs }, { enable_thinking: false });
+  for (const settings of [{}, { llmThinking: true }]) {
+    const { requests } = await harness([], settings);
+    assert.equal('chat_template_kwargs' in requests[0].body, false, 'OpenAI rejects unknown parameters');
+  }
+});
+
 test('the browser calls the configured endpoint directly, with the key only when there is one', async () => {
   const anonymous = await harness([], { customLLMBaseUrl: 'http://localhost:11434/v1/', customLLMModel: 'llama3' });
   assert.equal(anonymous.requests[0].url, 'http://localhost:11434/v1/chat/completions', 'trailing slash is trimmed');
