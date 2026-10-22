@@ -33,5 +33,6 @@
   "ttsSpeed": 1,
   "assistantLanguage": "",
   "bargeIn": true,
-  "autoExpressions": false
+  "autoExpressions": false,
+  "bodyLanguage": true
 }

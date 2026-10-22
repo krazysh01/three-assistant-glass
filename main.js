@@ -1,4 +1,7 @@
 import { createExpressionController } from './assistant/expressions.js';
+import { createEmotionEngine } from './assistant/emotion-engine.js';
+import { createAnimationGraph } from './assistant/animation-graph.js';
+import { createAnimationPlayer } from './animation-player.js';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -58,9 +61,7 @@ let currentSettings = {};
 
 let currentVrm = undefined;
 const characterExpressions = createExpressionController();
-let currentAnimationUrl = undefined;
-let currentMixer = undefined;
-let currentAnimationName = 'idleFemale.fbx'; // Start with idle animation name
+let currentAnimationName = 'idleFemale'; // the clip the animation dropdown shows
 
 let currentVrmName = 'Loading VRM...';
 let vrmNameMesh;
@@ -74,6 +75,122 @@ const blinkInterval = 4; // Average time between blinks in seconds
 const blinkDuration = 0.17; // Duration of a blink in seconds
 
 let vapi; // Declare vapi at the top level
+
+// ─── Body language and the emotion engine ────────────────────────────────────
+// The conversation's phase drives a state machine over animation clips
+// (assistant/animation-graph.js). The emotion engine reads feeling from both
+// the user's words and the character's own reply, sets the face, biases which
+// clip each phase plays, and fires the odd gesture. Vapi and the custom
+// pipeline feed the same functions below, so both providers behave alike.
+
+// Clips worth having before the conversation reaches for them; everything
+// else loads the first time it is chosen, while the previous clip carries on.
+const PRELOAD_ANIMATIONS = ['talking', 'thoughtfulHeadShake', 'greeting', 'idleHappy', 'TalkingShort', 'talkingBig', 'surprised'];
+
+let bodyLanguage = true;       // settings.bodyLanguage, applied live
+let conversationPhase = 'idle';
+let animationLibrary = null;   // Promise<string[]> of the clips the server has
+let vapiReply = '';            // Vapi's reply so far, for reading its feeling
+
+const animationGraph = createAnimationGraph();
+const animationPlayer = createAnimationPlayer({ THREE, loadClip: loadMixamoAnimation }, {
+  onFinished: (name) => animationGraph.clipFinished(name),
+  onError: (name, error) => {
+    console.error('Failed to load animation:', name, error);
+    animationGraph.clipFinished(name); // a gesture that cannot play must not strand the pose
+  },
+});
+const emotionEngine = createEmotionEngine({
+  getExpressions: () => characterExpressions.supported(),
+  onFace: (command) => characterExpressions.apply(command),
+  onFaceReset: () => characterExpressions.reset(),
+  onReaction: (kind, options) => bodyLanguage && animationGraph.react(kind, options),
+  onStatus: (text) => {
+    const status = document.getElementById('expressionStatus');
+    if (status) status.textContent = text;
+  },
+});
+
+function setConversationPhase(phase) {
+  // Speech handed the turn back: a reply that carried a strong feeling may
+  // end on a gesture. A pause mid-reply is not the end and earns none.
+  if (conversationPhase === 'speaking' && phase === 'listening') emotionEngine.replyEnded();
+  conversationPhase = phase;
+  if (bodyLanguage) animationGraph.setPhase(phase);
+}
+
+// A final utterance from the user, from either provider.
+function userSaid(text) {
+  animationGraph.cancelClosing(); // they took the turn; the old reply gets no closing beat
+  emotionEngine.heard(text);
+}
+
+// A session started: wave hello, and start reading feelings if enabled. The
+// classifier is a large download, so it loads only once a session begins.
+function beginConversation(settings) {
+  void emotionEngine.setEnabled(settings?.autoExpressions === true);
+  setConversationPhase('listening');
+  if (bodyLanguage) animationGraph.react('greeting', { force: true });
+}
+
+function endConversation() {
+  void emotionEngine.setEnabled(false);
+  emotionEngine.reset();
+  vapiReply = '';
+  setConversationPhase('idle');
+}
+
+function setBodyLanguage(enabled) {
+  bodyLanguage = enabled;
+  animationGraph.reset(); // off: back to the configured idle; on: the live phase
+  if (enabled) animationGraph.setPhase(conversationPhase);
+}
+
+// Runs a graph command on the player and keeps the dropdown in step.
+function playAnimation(command) {
+  animationPlayer.play(command).then((started) => {
+    if (!started) return;
+    currentAnimationName = command.clip;
+    updateAnimationDropdown();
+  }).catch(() => { /* reported through the player's onError */ });
+}
+
+// The clips the server has, fetched once for both the graph and the dropdown.
+function getAnimationLibrary() {
+  animationLibrary ||= fetch('/animations')
+    .then((response) => response.json())
+    .catch((error) => { animationLibrary = null; throw error; });
+  return animationLibrary;
+}
+
+async function prepareAnimations() {
+  const idle = (await getCurrentIdleAnimation()).split('/').pop().replace(/\.fbx$/i, '');
+  animationGraph.setLibrary({ base: idle });
+  let files;
+  try {
+    files = await getAnimationLibrary();
+  } catch (error) {
+    console.error('Error fetching animations:', error);
+    return;
+  }
+  const names = files.map((file) => file.replace(/\.fbx$/i, ''));
+  animationGraph.setLibrary({ available: names });
+  const wanted = [idle, ...PRELOAD_ANIMATIONS].filter((name) => names.includes(name));
+  void animationPlayer.preload([...new Set(wanted)], { gap: 300 });
+}
+
+// For poking at the body and face from the console, without a voice session:
+//   __emotion.inject('user', [{ label: 'sadness', score: 0.9 }])
+//   __emotion.phase('speaking'); __emotion.react('joy'); __emotion.state()
+window.__emotion = {
+  inject: (source, scores) => emotionEngine.inject(source, scores),
+  heard: (text) => userSaid(text),
+  spoke: (text, first = true) => emotionEngine.spoke(text, first),
+  enable: (on = true) => emotionEngine.setEnabled(on),
+  phase: (phase) => setConversationPhase(phase),
+  react: (kind) => animationGraph.react(kind, { force: true }),
+  state: () => ({ ...animationGraph.inspect(), playing: animationPlayer.current(), mood: emotionEngine.mood() }),
+};
 
 // Add this function to fetch settings
 async function fetchSettings() {
@@ -96,7 +213,11 @@ function watchSettingsChanges() {
     // rather than costing a page reload mid-conversation.
     if (newSettings.autoExpressions !== currentSettings.autoExpressions) {
       currentSettings.autoExpressions = newSettings.autoExpressions;
-      customAssistant?.setAutomaticExpressions?.(newSettings.autoExpressions === true);
+      if (assistantActive) void emotionEngine.setEnabled(newSettings.autoExpressions === true);
+    }
+    if (newSettings.bodyLanguage !== currentSettings.bodyLanguage) {
+      currentSettings.bodyLanguage = newSettings.bodyLanguage;
+      setBodyLanguage(newSettings.bodyLanguage !== false);
     }
     if (JSON.stringify(newSettings) !== JSON.stringify(currentSettings)) {
       console.log('Settings have changed. Reloading page...');
@@ -167,6 +288,7 @@ function showToast(text, kind = 'info', duration = 5000) {
 
 async function initializeApp() {
   await fetchSettings();
+  bodyLanguage = currentSettings.bodyLanguage !== false;
   const settings = currentSettings;
 
   // ... existing renderer setup ...
@@ -214,7 +336,10 @@ async function initializeApp() {
       const url = URL.createObjectURL(blob);
 
       if (fileType === 'fbx') {
-        loadFBX(url);
+        // A dropped clip plays as a manual pick, like one from the dropdown.
+        const name = file.name.replace(/\.fbx$/i, '');
+        animationPlayer.register(name, url);
+        animationGraph.setOverride(name);
       } else if (fileType === 'vrm') {
         currentVrmName = file.name.split('.')[0];
         loadVRM(url, currentVrmName);
@@ -276,7 +401,10 @@ async function loadVRM(modelUrl, modelName) {
 
             characterExpressions.bind(vrm.expressionManager);
             currentVrm = vrm;
-            customAssistant?.resetExpressions?.();
+            emotionEngine.reset();
+            // The body starts over on the new skeleton, from the configured idle.
+            animationPlayer.bind(vrm);
+            animationGraph.invalidate();
             //currentVrm.renderOrder = 10;
             scene.add(vrm.scene);
 
@@ -294,59 +422,24 @@ async function loadVRM(modelUrl, modelName) {
             updateVrmNameDisplay();
             if (!assistantActive) updateTextMesh(`Press Start to talk to ${currentVrmName}.`);
 
-            // Get the current idle animation from settings
-            const idleAnimationUrl = await getCurrentIdleAnimation();
-            // Automatically load the idle animation after the VRM is loaded
-            loadFBX(idleAnimationUrl);
+            await prepareAnimations();
         },
         (progress) => console.log('Loading model...', 100.0 * (progress.loaded / progress.total), '%'),
         (error) => console.error(error),
     );
 }
 
-// mixamo animation
-function loadFBX(animationUrl, playOnce = false) {
-    currentAnimationUrl = animationUrl;
-    currentAnimationName = animationUrl.split('/').pop();
-
-    if (currentVrm) {
-        currentVrm.humanoid.resetNormalizedPose();
-        currentMixer = new THREE.AnimationMixer(currentVrm.scene);
-
-        loadMixamoAnimation(animationUrl, currentVrm).then((clip) => {
-            const action = currentMixer.clipAction(clip);
-            
-            if (playOnce) {
-                action.setLoop(THREE.LoopOnce);
-                action.clampWhenFinished = true;
-                action.play();
-
-                // Switch to idle animation when greeting finishes
-                action.onFinished = async () => {
-                    const idleAnimationUrl = await getCurrentIdleAnimation();
-                    loadFBX(idleAnimationUrl);
-                };
-            } else {
-                action.play();
-            }
-
-            updateAnimationDropdown();
-        });
-    } else {
-        console.warn('VRM not loaded yet. Animation will be applied when VRM is ready.');
-    }
-}
-
 // Add this function to update the animation dropdown
 function updateAnimationDropdown() {
     const select = document.getElementById('animationSelect');
-    select.value = `animations/${currentAnimationName}`;
+    const value = `animations/${currentAnimationName}.fbx`;
+    select.value = value;
     
     // If the current animation is not in the list, add it as the first option
     if (select.value === '') {
         const option = document.createElement('option');
-        option.value = `animations/${currentAnimationName}`;
-        option.textContent = currentAnimationName.replace('.fbx', ''); // Remove .fbx extension
+        option.value = value;
+        option.textContent = currentAnimationName;
         select.insertBefore(option, select.firstChild);
         select.value = option.value;
     }
@@ -627,9 +720,15 @@ function animate() {
 
   const deltaTime = clock.getDelta();
 
-  if (currentMixer) {
-    currentMixer.update(deltaTime);
+  if (currentVrm) {
+    // The mood settles every frame and the face eases with it; the body
+    // follows the mood and the conversation's phase.
+    const mood = emotionEngine.update(deltaTime);
+    if (bodyLanguage) animationGraph.setMood(mood);
+    const command = animationGraph.update(deltaTime);
+    if (command) playAnimation(command);
   }
+  animationPlayer.update(deltaTime);
 
   if (currentVrm) {
     updateBlink(deltaTime);
@@ -677,8 +776,7 @@ window.addEventListener('resize', () => {
 function populateAnimationDropdown() {
     const select = document.getElementById('animationSelect');
 
-    fetch('/animations')
-        .then(response => response.json())
+    getAnimationLibrary()
         .then(animations => {
             // Clear existing options
             select.innerHTML = '';
@@ -703,7 +801,8 @@ populateAnimationDropdown();
 document.getElementById('animationSelect').addEventListener('change', (event) => {
     const selectedAnimation = event.target.value;
     if (selectedAnimation) {
-        loadFBX(selectedAnimation, false);
+        // A manual pick holds until the conversation moves to its next phase.
+        animationGraph.setOverride(selectedAnimation);
     }
 });
 
@@ -749,6 +848,7 @@ async function initializeVapi() {
     currentMessage = '';
     updateTextMesh('Call started...');
     setAssistantStatus('Listening…');
+    beginConversation(currentSettings);
   });
 
   vapi.on('call-end', () => {
@@ -756,17 +856,21 @@ async function initializeVapi() {
     updateTextMesh(currentMessage + '\n\nCall ended.');
     setAssistantStatus('');
     setAssistantButton(false);
+    endConversation();
   });
 
   vapi.on('speech-start', () => {
     console.log('Vapi started speaking');
     currentMessage = ''; // Remove the 'Assistant: ' prefix
+    vapiReply = '';
     setAssistantStatus('Speaking…');
+    setConversationPhase('speaking');
   });
 
   vapi.on('speech-end', () => {
     console.log('Vapi stopped speaking');
     setAssistantStatus('Listening…');
+    setConversationPhase('listening');
   });
 
   vapi.on('message', (message) => {
@@ -778,6 +882,17 @@ async function initializeVapi() {
         
         // Update the name display based on the speaker
         updateVrmNameDisplay(message.role === 'user' ? 'User' : 'Character');
+      }
+      // Feeling is read from final transcripts only; partials get rewritten
+      // as the words firm up.
+      if (message.transcriptType === 'final' && message.transcript) {
+        if (message.role === 'user') {
+          userSaid(message.transcript);
+        } else {
+          const first = vapiReply === '';
+          vapiReply = first ? message.transcript : `${vapiReply} ${message.transcript}`;
+          emotionEngine.spoke(vapiReply, first);
+        }
       }
     }
   });
@@ -916,10 +1031,9 @@ async function startCustomAssistant(session) {
     onText: updateTextMesh,
     onSpeaker: updateVrmNameDisplay,
     onStatus: setAssistantStatus,
-    getExpressions: () => characterExpressions.supported(),
-    onExpression: command => characterExpressions.apply(command),
-    onExpressionReset: () => characterExpressions.reset(),
-    onExpressionStatus: text => { document.getElementById('expressionStatus').textContent = text; },
+    onPhase: phase => setConversationPhase(phase),
+    onUserUtterance: text => userSaid(text),
+    onAssistantSpeech: (text, first) => emotionEngine.spoke(text, first),
     onError: (error) => {
       console.error('[assistant]', error);
       reportAssistantError(error);
@@ -932,6 +1046,7 @@ async function startCustomAssistant(session) {
     },
   });
   updateVrmNameDisplay('Character');
+  beginConversation(settings);
   await customAssistant.start();
 }
 
@@ -939,6 +1054,7 @@ function stopCustomAssistant() {
   assistantSession++;
   customAssistant?.stop();
   customAssistant = null;
+  endConversation();
   setAssistantStatus('');
   if (currentVrm) {
     currentVrm.expressionManager.setValue('aa', 0);

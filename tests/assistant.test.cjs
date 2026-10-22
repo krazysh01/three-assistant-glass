@@ -320,9 +320,10 @@ test('a scheduled browser recognition restart cannot reopen the mic after stop',
 
 // Exercise main.js's session controls without booting the unrelated Three.js scene.
 function mainHarness(createAssistant) {
-  const requests = [], button = { dataset: {} }, statuses = { dataset: {}, classList: { toggle() {} } };
+  const requests = [], conversations = [], button = { dataset: {} }, statuses = { dataset: {}, classList: { toggle() {} } };
   const context = vm.createContext({
     console, createAssistant, currentVrm: null, characterExpressions: { supported: () => [], apply() {}, reset() {} },
+    beginConversation: () => conversations.push('begin'), endConversation: () => conversations.push('end'),
     window: { addEventListener() {} },
     document: { getElementById: id => id === 'toggleVapi' ? button : statuses },
     updateTextMesh() {}, updateVrmNameDisplay() {},
@@ -331,7 +332,7 @@ function mainHarness(createAssistant) {
   const source = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   vm.runInContext(source.slice(source.indexOf("let assistantProvider = 'vapi';"), source.indexOf('// Add these functions to start and stop Vapi')), context);
   vm.runInContext("assistantProvider = 'custom'", context);
-  return { requests, button, toggle: () => context.toggleAssistant() };
+  return { requests, conversations, button, toggle: () => context.toggleAssistant() };
 }
 
 test('Stop during settings fetch prevents a late session from starting', async () => {
@@ -341,6 +342,7 @@ test('Stop during settings fetch prevents a late session from starting', async (
   h.requests[0].resolve({}); await starting;
   assert.equal(starts, 0);
   assert.equal(h.button.dataset.active, 'false');
+  assert.equal(h.conversations.includes('begin'), false, 'a stopped startup must not greet or start reading feelings');
 });
 
 test('failure from a stopped startup cannot stop a newer session', async () => {

@@ -213,6 +213,8 @@ async function populateSettingsForm() {
     // Interruption is on unless it was explicitly turned off.
     document.getElementById('bargeIn').checked = settings.bargeIn !== false;
     document.getElementById('autoExpressions').checked = settings.autoExpressions === true;
+    // Body language is on unless it was explicitly turned off.
+    document.getElementById('bodyLanguage').checked = settings.bodyLanguage !== false;
     updateSpeechProviderUI();
 }
 
@@ -377,6 +379,7 @@ const FIELDS = [
     { key: 'assistantLanguage',  id: 'assistantLanguage',    type: 'value' },
     { key: 'bargeIn',            id: 'bargeIn',              type: 'checkbox' },
     { key: 'autoExpressions',    id: 'autoExpressions',      type: 'checkbox' },
+    { key: 'bodyLanguage',       id: 'bodyLanguage',         type: 'checkbox' },
 ];
 
 // Blank means "provider default". Anything else has to be a number the
