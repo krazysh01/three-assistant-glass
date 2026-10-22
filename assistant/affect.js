@@ -76,6 +76,11 @@ const BASELINE = { v: 0, a: 0.25, d: 0 };
 // passes quickly, while a mood can colour a whole conversation.
 const HALF_LIFE = { v: 22, a: 9, d: 16, family: 11 };
 
+// How hard a new reading pushes the other feelings down, as a share of its
+// own weight. Not all the way: a surprised reply to good news should still
+// show the delight beside the surprise.
+const COMPETITION = 0.75;
+
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 const finite = (value, fallback = 0) => (Number.isFinite(value) ? value : fallback);
 
@@ -124,9 +129,14 @@ export function empathize(affect) {
  * family. Those weights are what stop the chosen face and clip flickering
  * between two plausible feelings on every classification.
  *
- * observe() pulls the mood towards a reading instead of adding to it. The
- * assistant channel reclassifies its reply cumulatively, so the same sentence
- * arrives again and again; adding would inflate the mood without limit.
+ * observe() pulls the mood towards a reading instead of adding to it, the
+ * family weights included: the reading's own family rises towards full, and
+ * every other family is pushed down. The assistant channel reclassifies its
+ * reply cumulatively, so the same sentence arrives again and again; adding
+ * would inflate the mood. And since every family fades at the same rate, an
+ * added-up feeling could never be overtaken by a newer one: bad news straight
+ * after good news left the face smiling until the character's own sympathetic
+ * reply finally outweighed the joy.
  */
 export function createMood(options = {}) {
   const baseline = { ...BASELINE, ...(options.baseline || {}) };
@@ -152,8 +162,16 @@ export function createMood(options = {}) {
       a = clamp(pull(a, clamp(finite(affect.a), 0, 1), w), 0, 1);
       d = clamp(pull(d, clamp(finite(affect.d), -1, 1), w), -1, 1);
       const family = EMPATHY[affect.family] ? affect.family : 'neutral';
+      // A neutral reading pushes the others down too: calm talk calms the face.
+      for (const [name, held] of families) {
+        if (name === family) continue;
+        const next = held * (1 - w * COMPETITION);
+        if (next < 0.02) families.delete(name);
+        else families.set(name, next);
+      }
       if (family !== 'neutral') {
-        families.set(family, clamp((families.get(family) || 0) + w, 0, 1));
+        const held = families.get(family) || 0;
+        families.set(family, clamp(pull(held, 1, w), 0, 1));
       }
       return this.value();
     },

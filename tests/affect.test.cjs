@@ -86,14 +86,39 @@ test('the face is chosen from channels the character has, with neutral below the
 test('a near-tie keeps the face it already had', async () => {
   const { createMood, scoresToAffect, resolveExpression } = await load('assistant/affect.js');
   const mood = createMood();
-  mood.observe(scoresToAffect([score('joy', 0.9)]), 0.5);
-  mood.observe(scoresToAffect([score('sadness', 0.9)]), 0.55);
-  const tied = mood.value();
-  assert.equal(tied.family, 'sad');
-  assert.equal(resolveExpression(tied, ALL, 'happy').expression, 'happy');
-  assert.equal(resolveExpression(tied, ALL, 'neutral').expression, 'sad');
   mood.observe(scoresToAffect([score('sadness', 0.9)]), 0.5);
-  assert.equal(resolveExpression(mood.value(), ALL, 'happy').expression, 'sad', 'a clear win switches');
+  mood.observe(scoresToAffect([score('joy', 0.9)]), 0.4);
+  const tied = mood.value();
+  assert.equal(tied.family, 'joy');
+  assert.ok(tied.familyWeight - tied.runnerUp < 0.1, 'joy only just leads');
+  assert.equal(resolveExpression(tied, ALL, 'sad').expression, 'sad');
+  assert.equal(resolveExpression(tied, ALL, 'neutral').expression, 'happy');
+  mood.observe(scoresToAffect([score('joy', 0.9)]), 0.5);
+  assert.equal(resolveExpression(mood.value(), ALL, 'sad').expression, 'happy', 'a clear win switches');
+});
+
+test('a new feeling displaces an older one at once, instead of waiting for it to fade', async () => {
+  const { createMood, scoresToAffect, empathize, resolveFace } = await load('assistant/affect.js');
+  // Good news, a delighted reply classified twice as it streams, then bad news
+  // eight seconds later, weighted as the engine weights them.
+  const mood = createMood();
+  const user = (label, s) => { const r = scoresToAffect([score(label, s)]); mood.observe(empathize(r), 0.55 * r.confidence); };
+  const reply = (label, s) => { const r = scoresToAffect([score(label, s)]); mood.observe(r, 0.7 * r.confidence); };
+  user('excitement', 0.92); mood.update(2.5);
+  reply('joy', 0.9); mood.update(2);
+  reply('joy', 0.88);
+  assert.ok(mood.value().familyWeight < 1, 'a reclassified reply no longer piles up to the limit');
+  mood.update(7.5);
+  let face = resolveFace(mood.value(), ALL, 'happy');
+  assert.equal(face.expression, 'happy');
+  user('sadness', 0.85); // "but it means moving away from my family"
+  face = resolveFace(mood.value(), ALL, face.expression);
+  assert.equal(face.expression, 'sad', 'the smile gives way before the reply');
+  assert.equal(face.weights.happy, undefined);
+  // A neutral reading calms whatever is held.
+  const before = mood.value().familyWeight;
+  mood.observe(scoresToAffect([score('neutral', 0.9)]), 0.6);
+  assert.ok(mood.value().familyWeight < before * 0.7);
 });
 
 test('a fading mood eases the face out instead of dropping it', async () => {
@@ -119,11 +144,12 @@ test('two feelings held at once blend, the leading one stronger, never past a fu
   mood.observe(scoresToAffect([score('surprise', 0.9)]), 0.6);
   const face = resolveFace(mood.value(), ALL);
   assert.deepEqual(Object.keys(face.weights).sort(), ['happy', 'surprised']);
-  assert.equal(face.expression, 'happy');
-  assert.ok(face.weights.happy > face.weights.surprised);
+  assert.equal(face.expression, 'surprised', 'the newer feeling leads');
+  assert.ok(face.weights.surprised > face.weights.happy);
+  assert.ok(face.weights.happy >= 0.15, 'and the delight still shows');
   assert.ok(face.weights.happy + face.weights.surprised <= 1 + 1e-9);
-  assert.equal(face.intensity, face.weights.happy);
-  assert.match(describeFace(face.weights), /^happy 0\.\d\d \+ surprised 0\.\d\d$/);
+  assert.equal(face.intensity, face.weights.surprised);
+  assert.match(describeFace(face.weights), /^surprised 0\.\d\d \+ happy 0\.\d\d$/);
   assert.equal(describeFace({}), 'neutral');
   // A character without the second channel gets the leading one alone.
   assert.deepEqual(Object.keys(resolveFace(mood.value(), ['neutral', 'happy']).weights), ['happy']);
@@ -132,12 +158,16 @@ test('two feelings held at once blend, the leading one stronger, never past a fu
 test('a smile is never paired with sadness or anger', async () => {
   const { createMood, scoresToAffect, resolveFace } = await load('assistant/affect.js');
   for (const other of ['sadness', 'anger']) {
-    const mood = createMood();
-    mood.observe(scoresToAffect([score('joy', 0.9)]), 0.7);
-    mood.observe(scoresToAffect([score(other, 0.9)]), 0.6);
-    const { weights } = resolveFace(mood.value(), ALL);
-    assert.ok(weights.happy > 0, `still happy after ${other}`);
-    assert.equal(weights.sad ?? weights.angry, undefined, `no ${other} beside the smile`);
+    for (const [first, second] of [['joy', other], [other, 'joy']]) {
+      for (const secondWeight of [0.3, 0.45, 0.6]) {
+        const mood = createMood();
+        mood.observe(scoresToAffect([score(first, 0.9)]), 0.7);
+        mood.observe(scoresToAffect([score(second, 0.9)]), secondWeight);
+        const { weights } = resolveFace(mood.value(), ALL);
+        assert.ok(Object.keys(weights).length > 0, `${first} then ${second}: a face shows`);
+        assert.ok(!(weights.happy && (weights.sad || weights.angry)), `${first} then ${second} at ${secondWeight}: ${JSON.stringify(weights)}`);
+      }
+    }
   }
   const calm = createMood(); // a sad face can still carry calm: sympathy, not a grimace
   calm.observe(scoresToAffect([score('sadness', 0.9)]), 0.7);
