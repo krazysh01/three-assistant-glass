@@ -14,11 +14,12 @@
 // a mirror of the user's anger. The classifier is an opt-in download; with it
 // off the mood stays calm and the body still follows the conversation.
 //
-// Hooks: getExpressions() → channels the character has; onFace(command);
+// Hooks: getExpressions() → channels the character has; onFace(face), where
+// face.weights is every channel to show, keyed by name (a blend of up to two);
 // onFaceReset(); onReaction(kind, opts); onStatus(text).
 
 import { createEmotionClassifier } from './emotions.js';
-import { createMood, scoresToAffect, empathize, resolveExpression } from './affect.js';
+import { createMood, scoresToAffect, empathize, resolveFace, describeFace } from './affect.js';
 
 // The reply streams in sentence by sentence; waiting a beat lets a burst of
 // sentences cost one classification rather than several.
@@ -44,10 +45,28 @@ const REACT_COOLDOWN_MS = 8000;
 const CLOSING_CONFIDENCE = 0.6;
 const CLOSING_COOLDOWN_MS = 20000;
 
-// The face only changes when the expression does, or its strength moves by
-// this much — the mood decays every frame and the face would otherwise be
-// re-commanded sixty times a second.
+// The face only changes when a channel's strength moves by this much: the
+// mood decays every frame and the face would otherwise be re-commanded sixty
+// times a second.
 const FACE_EPSILON = 0.05;
+
+// One classifier failure is usually a hiccup (a lost WebGPU device, a dropped
+// download), not a dead model. Retry a few times, further apart each time,
+// rather than leave expressions off for the rest of the session.
+const RECOVERY_ATTEMPTS = 5;
+const RECOVERY_BASE_MS = 500;
+const RECOVERY_MAX_MS = 8000;
+
+const NEUTRAL_FACE = () => ({ expression: 'neutral', intensity: 0, weights: {} });
+
+function faceChanged(next, current) {
+  if (next.expression !== current.expression) return true;
+  const names = new Set([...Object.keys(next.weights), ...Object.keys(current.weights)]);
+  for (const name of names) {
+    if (Math.abs((next.weights[name] || 0) - (current.weights[name] || 0)) >= FACE_EPSILON) return true;
+  }
+  return false;
+}
 
 // The gesture for a reading of the user. Calm, interested and neutral talk
 // earns none: listening attentively is the reaction.
@@ -89,7 +108,8 @@ export function createEmotionEngine(hooks = {}, classify, options = {}) {
   let assistantPending = null;     // { text, reply } latest unclassified reply text
   let assistantLast = '';
   let timer = null;
-  let face = { expression: 'neutral', intensity: 0 };
+  let recovery = null;             // a pending retry after a classifier failure
+  let face = NEUTRAL_FACE();
   let lastReactAt = -Infinity, lastClosingAt = -Infinity;
   let replyPeak = null;            // the reply's strongest reading so far
   let closedReply = -1;            // the reply whose closing beat was already taken
@@ -97,14 +117,12 @@ export function createEmotionEngine(hooks = {}, classify, options = {}) {
   function status(text) { hooks.onStatus?.(text); }
 
   function setFace(next, force = false) {
-    const changed = next.expression !== face.expression
-      || Math.abs(next.intensity - face.intensity) >= FACE_EPSILON;
-    if (!changed && !force) return;
+    if (!faceChanged(next, face) && !force) return;
     face = next;
     try { hooks.onFace?.(next); } catch (error) {
       // The character changed under us and lost a channel; neutral is safe.
       console.warn('[emotion] face rejected:', error.message);
-      face = { expression: 'neutral', intensity: 0 };
+      face = NEUTRAL_FACE();
     }
   }
 
@@ -113,7 +131,31 @@ export function createEmotionEngine(hooks = {}, classify, options = {}) {
   function refreshFace() {
     const supported = hooks.getExpressions?.() || [];
     if (!supported.length) return;
-    setFace(resolveExpression(mood.value(), supported, face.expression));
+    setFace(resolveFace(mood.value(), supported, face.expression));
+  }
+
+  function warmedUp(version) {
+    if (!enabled || generation !== version) return false;
+    ready = true;
+    status('Automatic expressions ready');
+    pump();
+    scheduleAssistant();
+    return true;
+  }
+
+  function recover(version, attempt = 1) {
+    if (!enabled || generation !== version || recovery || attempt > RECOVERY_ATTEMPTS) return;
+    const delay = Math.min(RECOVERY_MAX_MS, RECOVERY_BASE_MS * 2 ** (attempt - 1));
+    recovery = setTimeout(async () => {
+      recovery = null;
+      if (!enabled || generation !== version) return;
+      try {
+        await classify('', controller.signal);
+        warmedUp(version);
+      } catch {
+        if (enabled && generation === version) recover(version, attempt + 1);
+      }
+    }, delay);
   }
 
   function clearTimer() {
@@ -158,6 +200,7 @@ export function createEmotionEngine(hooks = {}, classify, options = {}) {
         console.warn('[emotion] classification failed:', error);
         ready = false;
         status('Automatic expressions unavailable');
+        recover(version);
       }
     } finally {
       if (generation === version) {
@@ -174,7 +217,7 @@ export function createEmotionEngine(hooks = {}, classify, options = {}) {
     const weight = (source === 'user' ? USER_WEIGHT : ASSISTANT_WEIGHT) * reading.confidence;
     mood.observe(felt, weight);
     refreshFace();
-    status(`Expression: ${face.expression}`);
+    status(`Expression: ${describeFace(face.weights)}`);
 
     const at = now();
     if (source === 'user') {
@@ -196,6 +239,8 @@ export function createEmotionEngine(hooks = {}, classify, options = {}) {
       controller?.abort();
       controller = null;
       clearTimer();
+      clearTimeout(recovery);
+      recovery = null;
       busy = false;
       ready = false;
       userPending = assistantPending = null;
@@ -210,13 +255,12 @@ export function createEmotionEngine(hooks = {}, classify, options = {}) {
       status('Loading automatic expressions…');
       try {
         await classify('', controller.signal);
-        if (!enabled || generation !== version) return;
-        ready = true;
-        status('Automatic expressions ready');
-        pump();
-        scheduleAssistant();
+        warmedUp(version);
       } catch {
-        if (enabled && generation === version) status('Automatic expressions unavailable');
+        if (enabled && generation === version) {
+          status('Automatic expressions unavailable');
+          recover(version);
+        }
       }
     },
 
@@ -284,7 +328,7 @@ export function createEmotionEngine(hooks = {}, classify, options = {}) {
       reply++;
       replyPeak = null;
       mood.reset();
-      face = { expression: 'neutral', intensity: 0 };
+      face = NEUTRAL_FACE();
       hooks.onFaceReset?.();
     },
 

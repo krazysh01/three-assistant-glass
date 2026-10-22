@@ -186,3 +186,72 @@ test('the browser classifier loads once, warms up without classifying, and seria
   assert.equal(peak, 1, 'inference is serialized');
   assert.deepEqual(both.map(r => r[0].text), ['one', 'two']);
 });
+
+test('a reaction to the user and the reply can show together as one blended face', async () => {
+  const h = await harness();
+  await h.engine.setEnabled(true);
+  h.engine.heard('I got the job!');
+  await h.answer(0, [{ label: 'excitement', score: 0.92 }]);
+  h.engine.spoke('No way, I did not see that coming at all!', true); h.flush();
+  await h.answer(1, [{ label: 'surprise', score: 0.9 }]);
+  const face = h.faces.at(-1);
+  assert.deepEqual(Object.keys(face.weights).sort(), ['happy', 'surprised']);
+  assert.match(h.statuses.at(-1), /^Expression: surprised 0\.\d\d \+ happy 0\.\d\d$/);
+});
+
+// An engine whose classifier fails on demand, with every timer's delay recorded.
+async function failingHarness() {
+  const timers = new Map(), delays = []; let id = 0;
+  const { createEmotionEngine } = await load('assistant/emotion-engine.js', {
+    setTimeout: (fn, ms) => { timers.set(++id, fn); delays.push(ms); return id; },
+    clearTimeout: key => timers.delete(key),
+  });
+  const state = { warmFailures: 0, warmCalls: 0, failNext: 0, requests: [], statuses: [] };
+  const classify = async (text) => {
+    if (!text) {
+      state.warmCalls++;
+      if (state.warmFailures > 0) { state.warmFailures--; throw new Error('model lost'); }
+      return null;
+    }
+    state.requests.push(text);
+    if (state.failNext > 0) { state.failNext--; throw new Error('device lost'); }
+    return [{ label: 'joy', score: 0.9 }];
+  };
+  const engine = createEmotionEngine({ getExpressions: () => ['neutral', 'happy'], onStatus: t => state.statuses.push(t) }, classify);
+  const flush = async () => { const work = [...timers.values()]; timers.clear(); work.forEach(fn => fn()); await tick(); await tick(); };
+  return { engine, state, delays, timers, flush };
+}
+
+test('after a classifier failure it retries, further apart each time, and picks up where it left off', async () => {
+  const h = await failingHarness();
+  await h.engine.setEnabled(true);
+  h.state.failNext = 1;
+  h.engine.heard('That is great news!'); await tick();
+  assert.equal(h.state.statuses.at(-1), 'Automatic expressions unavailable');
+  h.state.warmFailures = 2; // the first two retries fail as well
+  h.engine.heard('Are you still there?'); // waits for the model to come back
+  await h.flush(); await h.flush(); await h.flush();
+  assert.deepEqual(h.delays, [500, 1000, 2000]);
+  assert.ok(h.state.statuses.includes('Automatic expressions ready'));
+  assert.deepEqual(h.state.requests, ['That is great news!', 'Are you still there?']);
+  assert.match(h.state.statuses.at(-1), /^Expression: happy/);
+});
+
+test('a model that never comes back is given up on after five tries, and turning off stops retrying', async () => {
+  const h = await failingHarness();
+  await h.engine.setEnabled(true);
+  h.state.failNext = 1; h.state.warmFailures = Infinity;
+  h.engine.heard('Hello there!'); await tick();
+  for (let i = 0; i < 8; i++) await h.flush();
+  assert.deepEqual(h.delays, [500, 1000, 2000, 4000, 8000]);
+  assert.equal(h.state.warmCalls, 1 + 5);
+  assert.equal(h.timers.size, 0, 'nothing left scheduled');
+
+  const off = await failingHarness();
+  await off.engine.setEnabled(true);
+  off.state.failNext = 1;
+  off.engine.heard('Hello there!'); await tick();
+  assert.equal(off.timers.size, 1, 'a retry is scheduled');
+  await off.engine.setEnabled(false);
+  assert.equal(off.timers.size, 0, 'and cancelled when expressions are turned off');
+});

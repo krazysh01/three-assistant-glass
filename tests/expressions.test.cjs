@@ -44,3 +44,21 @@ test('VRM 0 custom surprise is exposed as the standard surprised emotion', async
   assert.ok(values.Surprised > 0.7);
   face.reset(); assert.equal(values.Surprised, 0);
 });
+
+test('a blended face drives several channels, drops ones the character lacks, and clears to neutral', async () => {
+  const { createExpressionController } = await load('assistant/expressions.js');
+  const values = { aa: 0.4 }, face = createExpressionController();
+  face.bind({ getExpression: n => ['happy', 'Surprised', 'sad'].includes(n), setValue: (n, v) => values[n] = v });
+  const { weights } = face.applyWeights({ happy: 0.6, surprised: 0.3, angry: 0.5 });
+  assert.deepEqual({ ...weights }, { happy: 0.6, surprised: 0.3 }, 'no angry channel on this character');
+  for (let i = 0; i < 40; i++) face.update(0.1);
+  assert.ok(Math.abs(values.happy - 0.6) < 0.001 && Math.abs(values.Surprised - 0.3) < 0.001);
+  assert.equal(values.angry, undefined);
+  face.apply({ expression: 'sad', intensity: 0.5 }); // a single expression replaces the blend
+  for (let i = 0; i < 40; i++) face.update(0.1);
+  assert.deepEqual([values.happy, values.Surprised, Math.round(values.sad * 100) / 100], [0, 0, 0.5]);
+  face.applyWeights({});
+  for (let i = 0; i < 40; i++) face.update(0.1);
+  assert.equal(values.sad, 0);
+  assert.equal(values.aa, 0.4, 'the mouth is not ours');
+});

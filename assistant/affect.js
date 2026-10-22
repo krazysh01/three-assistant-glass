@@ -177,11 +177,11 @@ export function createMood(options = {}) {
     value() {
       let family = 'neutral', weight = 0;
       for (const [name, w] of families) if (w > weight) { family = name; weight = w; }
-      let runnerUp = 0;
-      for (const [name, w] of families) if (name !== family && w > runnerUp) runnerUp = w;
+      let runnerUp = 0, runnerUpFamily = null;
+      for (const [name, w] of families) if (name !== family && w > runnerUp) { runnerUp = w; runnerUpFamily = name; }
       return {
         valence: v, arousal: a, dominance: d,
-        family, familyWeight: weight, runnerUp,
+        family, familyWeight: weight, runnerUp, runnerUpFamily,
         // Distance from calm overall, used to pace the body.
         energy: clamp(Math.hypot(v, a - baseline.a) / 1.2, 0, 1),
       };
@@ -194,26 +194,54 @@ export function createMood(options = {}) {
   };
 }
 
-/**
- * The face to wear for a mood, limited to the channels this character has.
- * Most of the hysteresis lives in the mood's decaying family weights; here
- * `previous` only breaks a near-tie, so two plausible feelings do not swap
- * back and forth between classifications.
- */
-export function resolveExpression(mood, supported = [], previous = 'neutral') {
-  const can = (name) => supported.includes(name);
-  const { family, familyWeight, runnerUp = 0, valence, arousal } = mood || {};
-  if (!family || !(familyWeight > 0.12)) return { expression: 'neutral', intensity: 0 };
+// A feeling shows nothing at or below FACE_FLOOR of family weight and its full
+// strength from FACE_FULL, easing between the two. A hard cutoff at the floor
+// made every mood end on a visible drop: a happy face held at about 0.4 for
+// half a minute of fading mood, then vanished within half a second.
+const FACE_FLOOR = 0.12;
+const FACE_FULL = 0.3;
 
+function presence(weight) {
+  const t = clamp((weight - FACE_FLOOR) / (FACE_FULL - FACE_FLOOR), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+// Channel pairs never shown together: a smile beside sadness or anger reads as
+// a grimace, not a mixed feeling.
+const CLASHES = [['happy', 'sad'], ['happy', 'angry']];
+const clashes = (a, b) => CLASHES.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
+
+// The secondary channel of a blend shows at this share of its own strength,
+// so the leading feeling always reads as the leading one.
+const BLEND_SHARE = 0.6;
+
+// The channel a family asks for on this character, or 'neutral'.
+function channelFor(family, mood, can) {
+  const { valence = 0, arousal = 0 } = mood || {};
   let wanted = FAMILY_EXPRESSION[family] || 'neutral';
   if (family === 'fear') wanted = arousal > 0.7 && can('surprised') ? 'surprised' : 'sad';
   if (wanted === 'neutral' && valence > 0.3) wanted = 'relaxed';
   // Fall back along the family's own axis rather than snapping to neutral, so a
   // character with no 'relaxed' channel still looks pleased instead of blank.
   if (!can(wanted)) wanted = valence > 0.2 ? 'happy' : valence < -0.2 ? 'sad' : 'neutral';
-  if (!can(wanted)) return { expression: 'neutral', intensity: 0 };
+  return can(wanted) ? wanted : 'neutral';
+}
 
-  const strength = clamp(0.3 + familyWeight * 0.45 + Math.abs(valence) * 0.25, 0, 0.9);
+/**
+ * The leading expression for a mood, limited to the channels this character
+ * has. Most of the hysteresis lives in the mood's decaying family weights;
+ * here `previous` only breaks a near-tie, so two plausible feelings do not
+ * swap back and forth between classifications.
+ */
+export function resolveExpression(mood, supported = [], previous = 'neutral') {
+  const can = (name) => supported.includes(name);
+  const { family, familyWeight, runnerUp = 0, valence } = mood || {};
+  if (!family || !(familyWeight > FACE_FLOOR)) return { expression: 'neutral', intensity: 0 };
+
+  const wanted = channelFor(family, mood, can);
+  if (wanted === 'neutral') return { expression: 'neutral', intensity: 0 };
+
+  const strength = clamp(0.3 + familyWeight * 0.45 + Math.abs(valence) * 0.25, 0, 0.9) * presence(familyWeight);
   // A runner-up family still close behind keeps the face it already had: a
   // 0.1 edge is noise from a single classification, not a change of feeling.
   if (previous && previous !== wanted && previous !== 'neutral' && can(previous)
@@ -222,6 +250,46 @@ export function resolveExpression(mood, supported = [], previous = 'neutral') {
     return { expression: previous, intensity: strength };
   }
   return { expression: wanted, intensity: strength };
+}
+
+/**
+ * The whole face for a mood: the leading expression, plus a second channel
+ * when another feeling is held at the same time (surprise beside delight,
+ * calm beside sympathy). Returns { expression, intensity } for the leading
+ * channel and `weights`, every channel to show keyed by name, summing to at
+ * most 1. An empty `weights` is a neutral face.
+ */
+export function resolveFace(mood, supported = [], previous = 'neutral') {
+  const can = (name) => supported.includes(name);
+  const primary = resolveExpression(mood, supported, previous);
+  const weights = {};
+  if (primary.expression === 'neutral' || !(primary.intensity > 0)) return { ...primary, weights };
+  weights[primary.expression] = primary.intensity;
+
+  // The leading family may not be the one showing (a near-tie keeps the old
+  // face), so it competes for second place alongside the runner-up.
+  const candidates = [[mood.family, mood.familyWeight], [mood.runnerUpFamily, mood.runnerUp]];
+  for (const [family, weight] of candidates) {
+    if (!family || !(weight > FACE_FLOOR)) continue;
+    const channel = channelFor(family, mood, can);
+    if (channel === 'neutral' || channel === primary.expression || clashes(channel, primary.expression)) continue;
+    const strength = (0.3 + weight * 0.45) * presence(weight) * BLEND_SHARE;
+    if (strength >= 0.05) weights[channel] = strength;
+    break;
+  }
+
+  const total = Object.values(weights).reduce((sum, value) => sum + value, 0);
+  if (total > 1) for (const name of Object.keys(weights)) weights[name] /= total;
+  return { expression: primary.expression, intensity: weights[primary.expression], weights };
+}
+
+// "happy 0.62 + surprised 0.21", or "neutral", for the status line.
+export function describeFace(weights) {
+  const parts = Object.entries(weights || {})
+    .filter(([, value]) => value > 0)
+    .sort((x, y) => y[1] - x[1])
+    .map(([name, value]) => `${name} ${value.toFixed(2)}`);
+  return parts.length ? parts.join(' + ') : 'neutral';
 }
 
 export { FAMILIES, FAMILY_EXPRESSION };

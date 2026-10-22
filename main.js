@@ -102,7 +102,7 @@ const animationPlayer = createAnimationPlayer({ THREE, loadClip: loadMixamoAnima
 });
 const emotionEngine = createEmotionEngine({
   getExpressions: () => characterExpressions.supported(),
-  onFace: (command) => characterExpressions.apply(command),
+  onFace: (face) => characterExpressions.applyWeights(face.weights),
   onFaceReset: () => characterExpressions.reset(),
   onReaction: (kind, options) => bodyLanguage && animationGraph.react(kind, options),
   onStatus: (text) => {
