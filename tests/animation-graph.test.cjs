@@ -137,7 +137,7 @@ test('a closing beat waits for speech to really end, and an interruption cancels
   interrupted.g.setPhase('speaking'); interrupted.run(1);
   interrupted.g.react('joy', { afterSpeech: true });
   interrupted.g.setPhase('listening');
-  interrupted.g.cancelClosing(); // the user barged in
+  interrupted.g.turnTaken(); // the user barged in
   interrupted.run(SPEAKING_GRACE + 0.5);
   assert.equal(interrupted.commands.some((c) => c.state === 'reacting'), false);
 });
@@ -191,4 +191,32 @@ test('a new character re-issues the pose', async () => {
   g.invalidate(); run(0.1);
   assert.equal(commands.length, count + 1);
   assert.equal(commands.at(-1).clip, 'idleFemale');
+});
+
+test('a barge-in ends the speaking grace, so the reaction to the user is not dropped', async () => {
+  const { g, commands, run } = await graph();
+  g.setPhase('speaking'); run(1);
+  // The pipeline cancels the reply (listening), then starts the next (thinking),
+  // all well inside the grace.
+  g.setPhase('listening'); g.setPhase('thinking');
+  assert.equal(g.react('sympathy'), false, 'still counts as speaking without the turn change');
+  g.turnTaken();
+  assert.equal(g.react('sympathy'), true);
+  run(0.1);
+  assert.equal(commands.at(-1).clip, 'thoughtfulHeadShake');
+  // While the character is really still talking, the turn change moves nothing.
+  const talking = await graph();
+  talking.g.setPhase('speaking'); talking.run(1);
+  talking.g.turnTaken(); talking.run(1);
+  assert.equal(talking.g.inspect().state, 'speaking');
+});
+
+test('with fidgeting off, a long idle never moves, but a manual pick still plays', async () => {
+  const { g, commands, run } = await graph();
+  g.setFidgeting(false);
+  run(120);
+  assert.equal(commands.some((c) => c.state === 'reacting'), false);
+  assert.deepEqual(commands.map((c) => c.clip), ['idleFemale']);
+  g.setOverride('danceRumba'); run(0.1);
+  assert.equal(commands.at(-1).clip, 'danceRumba');
 });

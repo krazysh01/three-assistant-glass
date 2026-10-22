@@ -121,7 +121,7 @@ function setConversationPhase(phase) {
 
 // A final utterance from the user, from either provider.
 function userSaid(text) {
-  animationGraph.cancelClosing(); // they took the turn; the old reply gets no closing beat
+  animationGraph.turnTaken(); // no closing beat on the reply they cut off, and react at once
   emotionEngine.heard(text);
 }
 
@@ -143,6 +143,7 @@ function endConversation() {
 function setBodyLanguage(enabled) {
   bodyLanguage = enabled;
   animationGraph.reset(); // off: back to the configured idle; on: the live phase
+  animationGraph.setFidgeting(enabled);
   if (enabled) animationGraph.setPhase(conversationPhase);
 }
 
@@ -288,7 +289,7 @@ function showToast(text, kind = 'info', duration = 5000) {
 
 async function initializeApp() {
   await fetchSettings();
-  bodyLanguage = currentSettings.bodyLanguage !== false;
+  setBodyLanguage(currentSettings.bodyLanguage !== false);
   const settings = currentSettings;
 
   // ... existing renderer setup ...

@@ -176,6 +176,7 @@ export function createAnimationGraph(options = {}) {
   let speakingFor = 0;      // seconds of speech since a reaction began
   let override = null;      // a manual pick from the animation dropdown
   let fidgetAt = null;      // seconds of stillness before the next fidget
+  let fidgeting = true;     // off when body language is: the idle then stays put
 
   const resolve = (name) => (name === 'base' ? base : name);
   const playable = (name) => {
@@ -301,10 +302,27 @@ export function createAnimationGraph(options = {}) {
       if (idle) base = strip(idle);
     },
 
-    // The user took the turn, so the reply they interrupted gets no closing
-    // beat: a celebratory gesture over someone talking reads as not listening.
-    cancelClosing() {
+    /**
+     * The user took the turn. The reply they interrupted gets no closing beat
+     * (a cheer over someone talking reads as not listening), and a departure
+     * from speech lands now: the grace exists for the queue draining between
+     * sentences, which cannot happen once the user has spoken. Without this,
+     * the gesture reacting to what they said would be refused as arriving
+     * "during speech" and dropped.
+     */
+    turnTaken() {
       afterSpeech = null;
+      if (pendingPhase !== null) {
+        phase = pendingPhase;
+        pendingPhase = null;
+        override = null;
+      }
+    },
+
+    // Whether a long stillness earns a fidget. Off, the idle never moves.
+    setFidgeting(on) {
+      fidgeting = on !== false;
+      fidgetAt = null;
     },
 
     // The player reporting that a one-shot clip finished.
@@ -376,7 +394,7 @@ export function createAnimationGraph(options = {}) {
       if (sinceChange < (MIN_DWELL[state] ?? 0.5)) return null;
 
       // A long stillness earns a fidget, and the mood is followed if it moved.
-      if (FIDGET_AFTER[state] !== undefined) {
+      if (fidgeting && FIDGET_AFTER[state] !== undefined) {
         fidgetAt ??= FIDGET_AFTER[state] * (1 + random());
         if (sinceChange >= fidgetAt) {
           const name = fidget();
