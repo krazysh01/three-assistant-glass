@@ -6,12 +6,15 @@
 // Surface: start(), stop(), addSystemMessage(text), mouthLevel()
 // UI hooks: onText(text), onSpeaker('User'|'Character'), onStatus(text),
 // onError(err) for a recoverable failure, onEnd(err) once the session is over.
+// Conversation hooks, for the character's body and face:
+//   onPhase('listening'|'thinking'|'speaking') as the turn moves along
+//   onUserUtterance(text) for each final utterance that is not our own echo
+//   onAssistantSpeech(text, first) with the reply as spoken so far
 
 import { streamChat } from './llm.js';
 import { createStt } from './stt.js';
 import { createSpeaker, cleanForSpeech } from './tts.js';
 import { createSentenceSplitter } from './sentences.js';
-import { createAutomaticExpressions } from './automatic-expressions.js';
 
 const DEFAULT_SYSTEM_PROMPT =
   'You are a friendly voice assistant. Reply in short, natural spoken sentences. ' +
@@ -42,7 +45,6 @@ export function isEcho(transcript, recentSpeech) {
 export function createAssistant(settings, ui) {
   const bargeIn = settings.bargeIn !== false;
   const history = [];
-  const expressions = createAutomaticExpressions(ui);
   let stt = null;
   let speaker = null;
   let reply = null;
@@ -109,6 +111,7 @@ export function createAssistant(settings, ui) {
 
     ui.onSpeaker('User');
     showText(text);
+    ui.onUserUtterance?.(text);
     history.push({ role: 'user', content: text });
     trimHistory();
     await respond();
@@ -122,6 +125,7 @@ export function createAssistant(settings, ui) {
     const splitter = createSentenceSplitter(say);
 
     ui.onStatus('Thinking…');
+    ui.onPhase?.('thinking');
     try {
       await streamChat(history, settings, {
         signal: controller.signal,
@@ -138,6 +142,9 @@ export function createAssistant(settings, ui) {
       if (reply === turn) {
         finishReply(turn);
         reply = null;
+        // Nothing was said (an empty reply, or the model failed): the turn is
+        // the user's again. Otherwise the speaker's onEnd hands it back.
+        if (running && !speaker?.isBusy()) ui.onPhase?.('listening');
       }
     }
   }
@@ -159,6 +166,7 @@ export function createAssistant(settings, ui) {
         onStart: () => {
           ui.onSpeaker('Character');
           ui.onStatus('Speaking…');
+          ui.onPhase?.('speaking');
           if (!bargeIn) stt?.setSuppressed(true); // don't transcribe our own voice
         },
         onSentence: (sentence) => {
@@ -167,13 +175,18 @@ export function createAssistant(settings, ui) {
           spokenText = spokenText ? `${spokenText} ${sentence}` : sentence;
           ui.onSpeaker('Character');
           showText(spokenText);
-          // Expressions follow what has actually been spoken, so the face
+          // Feeling is read from what has actually been spoken, so the face
           // matches the audio rather than running ahead of it.
-          expressions.transcript(spokenText, first);
+          ui.onAssistantSpeech?.(spokenText, first);
         },
         onEnd: () => {
           if (!bargeIn) stt?.setSuppressed(false);
-          if (running && !reply) ui.onStatus('Listening…');
+          // Mid-reply the queue can drain while the model is still writing;
+          // that is a pause in the reply, not the end of it.
+          if (running && !reply) {
+            ui.onStatus('Listening…');
+            ui.onPhase?.('listening');
+          }
         },
         onStatus: ui.onStatus,
         onError: (err) => { // a failed sentence shouldn't wipe the conversation
@@ -203,9 +216,7 @@ export function createAssistant(settings, ui) {
       await stt.start();
       if (!running || session !== startingSession) return;
       ui.onStatus('Listening…');
-
-      // Downloads a model on first use, so it must not delay the greeting.
-      void expressions.setEnabled(settings.autoExpressions === true);
+      ui.onPhase?.('listening');
 
       if (settings.customFirstMessage) {
         history.push({ role: 'assistant', content: settings.customFirstMessage });
@@ -218,7 +229,6 @@ export function createAssistant(settings, ui) {
       running = false;
       session++;
       cancelReply();
-      expressions.stop();
       stt?.stop();
       speaker?.destroy();
       stt = null;
@@ -234,9 +244,6 @@ export function createAssistant(settings, ui) {
       history.push({ role: 'system', content });
       trimHistory();
     },
-
-    setAutomaticExpressions: (value) => expressions.setEnabled(value === true),
-    resetExpressions: () => expressions.reset(),
 
     mouthLevel: () => speaker?.mouthLevel() ?? 0,
   };

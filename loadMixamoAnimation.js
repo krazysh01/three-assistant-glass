@@ -7,9 +7,14 @@ import { mixamoVRMRigMap } from './mixamoVRMRigMap.js';
  *
  * @param {string} url A url of mixamo animation data
  * @param {VRM} vrm A target VRM
+ * @param {object} [options]
+ * @param {number} [options.restHipsHeight] The VRM's hip height in its rest
+ *   pose. Pass it whenever the VRM may be animating while this loads: measured
+ *   from a kneeling or crouching frame, the hip motion would be scaled wrongly
+ *   and the clip would float or sink.
  * @returns {Promise<THREE.AnimationClip>} The converted AnimationClip
  */
-export function loadMixamoAnimation( url, vrm ) {
+export function loadMixamoAnimation( url, vrm, options = {} ) {
 
 	const loader = new FBXLoader(); // A loader which loads FBX
 	return loader.loadAsync( url ).then( ( asset ) => {
@@ -25,9 +30,14 @@ export function loadMixamoAnimation( url, vrm ) {
 
 		// Adjust with reference to hips height.
 		const motionHipsHeight = asset.getObjectByName( 'mixamorigHips' ).position.y;
-		const vrmHipsY = vrm.humanoid?.getNormalizedBoneNode( 'hips' ).getWorldPosition( _vec3 ).y;
-		const vrmRootY = vrm.scene.getWorldPosition( _vec3 ).y;
-		const vrmHipsHeight = Math.abs( vrmHipsY - vrmRootY );
+		let vrmHipsHeight = options.restHipsHeight;
+		if ( ! Number.isFinite( vrmHipsHeight ) ) {
+
+			const vrmHipsY = vrm.humanoid?.getNormalizedBoneNode( 'hips' ).getWorldPosition( _vec3 ).y;
+			const vrmRootY = vrm.scene.getWorldPosition( _vec3 ).y;
+			vrmHipsHeight = Math.abs( vrmHipsY - vrmRootY );
+
+		}
 		const hipsPositionScale = vrmHipsHeight / motionHipsHeight;
 
 		clip.tracks.forEach( ( track ) => {

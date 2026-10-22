@@ -76,6 +76,25 @@
         </section>
 
         <section class="group">
+            <h2 class="group-title"><span class="icon" style="--icon: url('icons/audio-lines.svg')"></span>Lip sync</h2>
+            <p class="group-intro">How far the mouth opens for the voice. Saved changes apply straight away without reloading the character, so keep it talking while you tune. Avatars differ, so tune by eye.</p>
+            <div class="row">
+                <label class="row-label" for="mouthGain">Opening <span class="field-note">How wide normal speech opens the mouth</span></label>
+                <div class="row-control range-control">
+                    <input type="range" id="mouthGain" min="0.5" max="3" step="0.1" value="1.5">
+                    <output for="mouthGain" id="mouthGainValue">1.5</output>
+                </div>
+            </div>
+            <div class="row">
+                <label class="row-label" for="mouthCurve">Sensitivity <span class="field-note">Lower opens further on quiet sounds; 1 is linear</span></label>
+                <div class="row-control range-control">
+                    <input type="range" id="mouthCurve" min="0.3" max="1" step="0.05" value="0.6">
+                    <output for="mouthCurve" id="mouthCurveValue">0.6</output>
+                </div>
+            </div>
+        </section>
+
+        <section class="group">
             <h2 class="group-title"><span class="icon" style="--icon: url('icons/bug.svg')"></span>Debug</h2>
             <label class="row switch">
                 <span class="row-label">Free camera <span class="field-note">Orbit, pan and zoom with the mouse</span></span>
@@ -390,15 +409,20 @@
             </section>
 
             <section class="group">
-                <h2 class="group-title"><span class="icon" style="--icon: url('icons/flask-round.svg')"></span>Expressions</h2>
+                <h2 class="group-title"><span class="icon" style="--icon: url('icons/flask-round.svg')"></span>Body &amp; expressions</h2>
+                <label class="row switch">
+                    <span class="row-label">Body language <span class="field-note">Listens, thinks, talks and gestures along with the conversation</span></span>
+                    <span class="row-control"><input type="checkbox" id="bodyLanguage"><span class="slider"></span></span>
+                </label>
                 <label class="row switch">
                     <span class="row-label">Automatic expressions <span class="field-note">Experimental</span></span>
                     <span class="row-control"><input type="checkbox" id="autoExpressions"><span class="slider"></span></span>
                 </label>
                 <p class="group-intro">
-                    Estimates a facial expression from the character's English replies and blends
-                    it into the VRM. Runs entirely in this browser; the first use downloads a
-                    roughly 125 MB model, and the voice keeps working while it loads.
+                    Reads the feeling in what you say and in the character's English replies, then
+                    sets its face, colours its body language and lets it react: sympathy for bad
+                    news, a cheer for good. Runs entirely in this browser; the first use downloads
+                    a roughly 125 MB model, and the voice keeps working while it loads.
                 </p>
             </section>
         </div>

@@ -4,6 +4,7 @@ import { fetchModels, sttModels, ttsModels, voicesFor, describeVoice, describeLa
   from './model-catalog.mjs';
 import { KOKORO_VOICES } from './assistant/kokoro.js';
 import { enhanceSelect, enhanceCombobox } from './combobox.js';
+import { MOUTH_DEFAULTS, mouthSetting } from './lip-sync.js';
 
 // Every dropdown-shaped control on this page draws its own menu. This runs
 // before anything populates the form: enhanceSelect leaves the <select> in
@@ -212,7 +213,13 @@ async function populateSettingsForm() {
     document.getElementById('assistantLanguage').value = settings.assistantLanguage || '';
     // Interruption is on unless it was explicitly turned off.
     document.getElementById('bargeIn').checked = settings.bargeIn !== false;
+    for (const id of Object.keys(MOUTH_DEFAULTS)) {
+        document.getElementById(id).value = mouthSetting(settings, id);
+        showMouthValue(id);
+    }
     document.getElementById('autoExpressions').checked = settings.autoExpressions === true;
+    // Body language is on unless it was explicitly turned off.
+    document.getElementById('bodyLanguage').checked = settings.bodyLanguage !== false;
     updateSpeechProviderUI();
 }
 
@@ -376,7 +383,10 @@ const FIELDS = [
     { key: 'ttsSpeed',           id: 'ttsSpeed',             type: 'value', validate: validateSpeed },
     { key: 'assistantLanguage',  id: 'assistantLanguage',    type: 'value' },
     { key: 'bargeIn',            id: 'bargeIn',              type: 'checkbox' },
+    { key: 'mouthGain',          id: 'mouthGain',            type: 'number' },
+    { key: 'mouthCurve',         id: 'mouthCurve',           type: 'number' },
     { key: 'autoExpressions',    id: 'autoExpressions',      type: 'checkbox' },
+    { key: 'bodyLanguage',       id: 'bodyLanguage',         type: 'checkbox' },
 ];
 
 // Blank means "provider default". Anything else has to be a number the
@@ -411,8 +421,18 @@ const fieldEl = (f) => document.getElementById(f.id);
 const readField = (f) => {
     const el = fieldEl(f);
     if (!el) return undefined;
-    return f.type === 'checkbox' ? el.checked : el.value;
+    if (f.type === 'checkbox') return el.checked;
+    return f.type === 'number' ? Number(el.value) : el.value;
 };
+
+// The lip sync sliders show their value beside them.
+function showMouthValue(id) {
+    const value = Number(document.getElementById(id).value);
+    document.getElementById(`${id}Value`).textContent = value.toFixed(id === 'mouthGain' ? 1 : 2);
+}
+for (const id of Object.keys(MOUTH_DEFAULTS)) {
+    document.getElementById(id)?.addEventListener('input', () => showMouthValue(id));
+}
 
 // ─── Model and voice suggestions ─────────────────────────────────────────────
 // Populated from each configured endpoint's /v1/models. Everything here is

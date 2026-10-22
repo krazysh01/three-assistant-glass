@@ -12,6 +12,7 @@ const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers
 const MODEL_ID = 'SamLowe/roberta-base-go_emotions-onnx';
 
 let loading = null;
+let loaded = null; // the pipeline `loading` resolved to
 
 // Resolves to a text-classification pipeline. Concurrent callers share one load.
 export function loadClassifier(onProgress) {
@@ -19,17 +20,28 @@ export function loadClassifier(onProgress) {
     loading = (async () => {
       const { pipeline } = await import(TRANSFORMERS_URL);
       const webgpu = !!navigator.gpu;
-      return pipeline('text-classification', MODEL_ID, {
+      loaded = await pipeline('text-classification', MODEL_ID, {
         dtype: 'q8', // the only ONNX weights this repo publishes
         device: webgpu ? 'webgpu' : 'wasm',
         progress_callback: onProgress,
       });
+      return loaded;
     })().catch((err) => {
       loading = null; // allow a retry next time
       throw err;
     });
   }
   return loading;
+}
+
+// A pipeline whose inference failed (a lost WebGPU device, say) is broken for
+// good, so it is dropped and the next call loads a fresh one, from the
+// browser's cache rather than the network. Only that pipeline: a newer one may
+// already be loading.
+function discard(classifier) {
+  if (loaded !== classifier) return;
+  loading = loaded = null;
+  Promise.resolve(classifier?.dispose?.()).catch(() => {});
 }
 
 /**
@@ -58,7 +70,14 @@ export function createEmotionClassifier(onStatus) {
       return classifier(text, { top_k: 28, truncation: true, max_length: 128 });
     });
     chain = run.catch(() => {});
-    const scores = await run;
+    let scores;
+    try {
+      scores = await run;
+    } catch (error) {
+      // Being cancelled is the caller's choice, not a broken model.
+      if (!signal?.aborted) discard(classifier);
+      throw error;
+    }
     signal?.throwIfAborted();
     return scores;
   };

@@ -51,13 +51,31 @@ The quick-setup buttons fill in a working combination for OpenAI, Ollama, LM
 Studio, Speaches, or fully in-browser speech; every field stays editable
 afterwards.
 
-#### Automatic expressions
+#### Body language and automatic expressions
 
-Optional, off by default, under **Settings → Assistant → Expressions**. Each
-sentence the character speaks is classified with the
-[GoEmotions](https://huggingface.co/SamLowe/roberta-base-go_emotions-onnx) model
-and blended into the VRM's `happy` / `sad` / `angry` / `relaxed` / `surprised`
-expressions, leaving blinking and mouth movement alone.
+Both live under **Settings → Assistant → Body & expressions**, and work with
+either assistant provider.
+
+**Body language** is on by default. The character's body follows the
+conversation instead of looping one clip: it listens while you talk, looks
+thoughtful while the reply is generated, talks while it speaks, and now and
+then gestures or fidgets. Clips crossfade into each other. Each phase has a
+pool of clips (see `POOLS` in `assistant/animation-graph.js`), and the
+character's mood picks among them, so the same reply is delivered with
+`talkingBig` when delighted and `talkingTellingSecret` when gentle. Switch it
+off to keep the idle animation chosen above.
+
+**Automatic expressions** is optional and off by default. It reads the feeling
+in what *you* say as well as in the character's replies, using the
+[GoEmotions](https://huggingface.co/SamLowe/roberta-base-go_emotions-onnx) model,
+and turns it into a mood. That mood sets the VRM's `happy` / `sad` / `angry` /
+`relaxed` / `surprised` expressions (blinking and mouth movement are left
+alone), chooses the body's clips, and triggers reactions: a sympathetic head
+shake at bad news, a cheer at good news, a thank-you when thanked. Your
+feelings are taken as something to respond to rather than copy, so an angry
+message makes the character concerned and apologetic, not angry back. Your
+words are classified as soon as you finish speaking, so the reaction lands
+before the reply starts.
 
 Classification runs in the browser through
 [transformers.js](https://github.com/huggingface/transformers.js), on WebGPU
@@ -115,6 +133,7 @@ it, so leave the switch on there.
 - Custom 3D model ([vrm](https://hub.vroid.com/en))
 - Custom animations (fbx)
 - Animated to voice assistant's voice
+- Body language that follows the conversation: listening, thinking, talking and gestures
 
 ### Holographic Display - [Looking Glass](https://lookingglassfactory.com/webxr)
 
@@ -123,7 +142,7 @@ it, so leave the switch on there.
 ### Experimental
 
 - Plaintext clipboard access
-- Automatic facial expressions from the character's replies
+- Emotion engine: the face, pose and gestures react to what you say and to how the character replies
 
 ### Possible future features
 
@@ -182,8 +201,8 @@ THREE_ASSISTANT_PORT=3010 npm start
 npm test
 ```
 
-Covers the assistant pipeline, the speech queue, expressions and the settings
-plumbing. No network and no dependencies beyond the ones already installed.
+Covers the assistant pipeline, the speech queue, the emotion engine, the
+animation state machine and player, expressions and the settings plumbing. No network and no dependencies beyond the ones already installed.
 
 ## View on a Looking Glass Display
 
@@ -232,10 +251,21 @@ plumbing. No network and no dependencies beyond the ones already installed.
 1. Open the `animations` folder
 2. Drag and drop your .fbx files into the folder
 
+New clips can be played from the animation picker straight away. Body language
+picks clips by name from the pools in `assistant/animation-graph.js`; add a
+clip's name to a pool to have the character use it on its own.
+
 ### I turned off the Settings Icon, how do I get it back?
 
 1. Go back to http://localhost:3000/settings
 2. Turn on `Show Settings Icon`
+
+### The mouth barely moves, or opens too wide
+
+Avatars' mouth shapes differ, so tune them under **Settings → Features → Lip
+sync**. **Opening** sets how wide normal speech opens the mouth, and
+**Sensitivity** how far quiet sounds open it (1 is linear). Saved changes apply
+without reloading the character, so keep it talking while you adjust.
 
 ## Troubleshooting
 

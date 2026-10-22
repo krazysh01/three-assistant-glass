@@ -117,16 +117,20 @@ test('browser speech is busy before onstart and ignores cancelled start events',
 });
 
 async function pipelineHarness(settings = {}, startup = Promise.resolve()) {
-  const calls = [], queued = [], statuses = [], errors = [];
-  let hooks, busy = false, cancels = 0;
+  const calls = [], queued = [], statuses = [], errors = [], events = [];
+  let hooks, speakerHooks, busy = false, speaking = false, cancels = 0;
   const speaker = {
     enqueue(text) { queued.push(text); busy = true; },
-    cancel() { cancels++; queued.length = 0; busy = false; },
-    destroy() {}, isSpeaking: () => false, isBusy: () => busy,
+    // Like the real speaker, cancelling speech that had started ends it.
+    cancel() {
+      cancels++; queued.length = 0; busy = false;
+      if (speaking) { speaking = false; speakerHooks.onEnd(); }
+    },
+    destroy() {}, isSpeaking: () => speaking, isBusy: () => busy,
   };
   const module = await load('assistant/pipeline.js', {}, {
     'assistant/stt.js': { createStt: (_, h) => { hooks = h; return { start: () => startup, stop() {} }; } },
-    'assistant/tts.js': { createSpeaker: () => speaker, cleanForSpeech: text => text },
+    'assistant/tts.js': { createSpeaker: (_, h) => { speakerHooks = h; return speaker; }, cleanForSpeech: text => text },
     'assistant/llm.js': { streamChat: (messages, _settings, options) => {
       const call = { ...deferred(), messages: snapshot(messages), ...options };
       calls.push(call);
@@ -137,9 +141,57 @@ async function pipelineHarness(settings = {}, startup = Promise.resolve()) {
   const assistant = module.createAssistant(settings, {
     onText() {}, onSpeaker() {}, onStatus: text => statuses.push(text),
     onError: err => errors.push(err), onEnd: err => ends.push(err),
+    onPhase: phase => events.push(`phase:${phase}`),
+    onUserUtterance: text => events.push(`user:${text}`),
+    onAssistantSpeech: (text, first) => events.push(`speech:${text}|${first}`),
   });
-  return { assistant, calls, queued, statuses, errors, ends, hooks: () => hooks, cancels: () => cancels };
+  return {
+    assistant, calls, queued, statuses, errors, ends, events,
+    hooks: () => hooks, speakerHooks: () => speakerHooks, cancels: () => cancels,
+    // The speaker starting playback, and finishing everything it was given.
+    startSpeaking: () => { speaking = true; speakerHooks.onStart(); },
+    settle: () => { busy = false; speaking = false; },
+  };
 }
+
+test('the pipeline reports the turn as it moves, for the body and the face', async () => {
+  const h = await pipelineHarness(); await h.assistant.start();
+  assert.deepEqual(h.events.splice(0), ['phase:listening']);
+
+  const first = h.hooks().onUtterance('That is wonderful news!');
+  assert.deepEqual(h.events.splice(0), ['user:That is wonderful news!', 'phase:thinking']);
+  h.calls[0].onDelta('I am so happy for you. ');
+  h.startSpeaking();
+  h.speakerHooks().onSentence('I am so happy for you.');
+  h.speakerHooks().onSentence('Truly.');
+  assert.deepEqual(h.events.splice(0), [
+    'phase:speaking', 'speech:I am so happy for you.|true', 'speech:I am so happy for you. Truly.|false',
+  ]);
+  h.speakerHooks().onEnd(); // the queue drained while the model is still writing
+  h.calls[0].onDelta('Truly. '); h.calls[0].resolve(); await first;
+  assert.deepEqual(h.events.splice(0), [], 'a pause mid-reply is not the end of it');
+  h.speakerHooks().onEnd(); h.settle();
+  assert.deepEqual(h.events.splice(0), ['phase:listening']);
+
+  const empty = h.hooks().onUtterance('Hello?');
+  h.calls[1].resolve(); await empty; // nothing to say
+  assert.deepEqual(h.events.splice(0), ['user:Hello?', 'phase:thinking', 'phase:listening']);
+
+  const story = h.hooks().onUtterance('Tell me a story.');
+  h.calls[2].onDelta('Once upon a time there was a fox. ');
+  h.startSpeaking(); h.speakerHooks().onSentence('Once upon a time there was a fox.');
+  h.events.length = 0;
+  // The microphone hears the character's own voice: not the user's feelings.
+  h.hooks().onSpeechStart();
+  const echo = h.hooks().onUtterance('once upon a time there was a fox'); await tick();
+  assert.deepEqual(h.events.splice(0), []);
+  // A real barge-in: speech ends, then the user's words, then the new reply.
+  h.hooks().onSpeechStart();
+  const interruption = h.hooks().onUtterance('Stop, that is wrong!');
+  assert.deepEqual(h.events.splice(0), ['phase:listening', 'user:Stop, that is wrong!', 'phase:thinking']);
+  h.calls[2].resolve(); h.calls[3].resolve(); await story; await interruption; await echo;
+  h.assistant.stop();
+});
 
 test('a new question cancels audio still synthesizing after the LLM finishes', async () => {
   const h = await pipelineHarness(); await h.assistant.start();
@@ -320,9 +372,10 @@ test('a scheduled browser recognition restart cannot reopen the mic after stop',
 
 // Exercise main.js's session controls without booting the unrelated Three.js scene.
 function mainHarness(createAssistant) {
-  const requests = [], button = { dataset: {} }, statuses = { dataset: {}, classList: { toggle() {} } };
+  const requests = [], conversations = [], button = { dataset: {} }, statuses = { dataset: {}, classList: { toggle() {} } };
   const context = vm.createContext({
     console, createAssistant, currentVrm: null, characterExpressions: { supported: () => [], apply() {}, reset() {} },
+    beginConversation: () => conversations.push('begin'), endConversation: () => conversations.push('end'),
     window: { addEventListener() {} },
     document: { getElementById: id => id === 'toggleVapi' ? button : statuses },
     updateTextMesh() {}, updateVrmNameDisplay() {},
@@ -331,7 +384,7 @@ function mainHarness(createAssistant) {
   const source = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   vm.runInContext(source.slice(source.indexOf("let assistantProvider = 'vapi';"), source.indexOf('// Add these functions to start and stop Vapi')), context);
   vm.runInContext("assistantProvider = 'custom'", context);
-  return { requests, button, toggle: () => context.toggleAssistant() };
+  return { requests, conversations, button, toggle: () => context.toggleAssistant() };
 }
 
 test('Stop during settings fetch prevents a late session from starting', async () => {
@@ -341,6 +394,7 @@ test('Stop during settings fetch prevents a late session from starting', async (
   h.requests[0].resolve({}); await starting;
   assert.equal(starts, 0);
   assert.equal(h.button.dataset.active, 'false');
+  assert.equal(h.conversations.includes('begin'), false, 'a stopped startup must not greet or start reading feelings');
 });
 
 test('failure from a stopped startup cannot stop a newer session', async () => {
